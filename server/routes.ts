@@ -8,6 +8,8 @@ import { z } from "zod";
 import { insertRestaurantSchema, insertUserSchema, insertMenuItemSchema, insertTableSchema, insertOrderSchema, insertOrderItemSchema, insertFeedbackSchema } from "@shared/schema";
 // Stripe functionality removed - import { stripe, createOrUpdateCustomer, createSubscription, updateSubscription, cancelSubscription, generateClientSecret, handleWebhookEvent, PLANS } from "./stripe";
 import QRCode from 'qrcode';
+import { generateRestaurantInsights, handleRestaurantChat, generateAnalyticsInsights } from './ai';
+import { OrderItem, Order } from "@shared/schema";
 
 // Schema for login requests
 const loginSchema = z.object({
@@ -449,6 +451,142 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Public restaurant endpoint for customer menu
+  app.get('/api/public/restaurants/:restaurantId', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      const restaurant = await storage.getRestaurant(restaurantId);
+      if (!restaurant) {
+        return res.status(404).json({ message: 'Restaurant not found' });
+      }
+
+      // Return only public restaurant data
+      return res.json({
+        id: restaurant.id,
+        name: restaurant.name,
+        description: restaurant.description,
+        logo: restaurant.logo
+      });
+    } catch (error) {
+      console.error('Error fetching restaurant:', error);
+      return res.status(500).json({ message: 'Failed to fetch restaurant' });
+    }
+  });
+
+  // Public table sessions endpoint for customer menu
+  app.get('/api/public/restaurants/:restaurantId/table-sessions', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const tableId = req.query.tableId ? parseInt(req.query.tableId as string) : undefined;
+      
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      if (tableId && isNaN(tableId)) {
+        return res.status(400).json({ message: 'Invalid table ID' });
+      }
+
+      // Get table sessions for the restaurant
+      const sessions = await storage.getTableSessionsByRestaurantId(restaurantId);
+      
+      // Filter by table ID if provided
+      const filteredSessions = tableId 
+        ? sessions.filter(session => session.tableId === tableId)
+        : sessions;
+
+      return res.json(filteredSessions);
+    } catch (error) {
+      console.error('Error fetching table sessions:', error);
+      return res.status(500).json({ message: 'Failed to fetch table sessions' });
+    }
+  });
+
+  // Public create table session endpoint for customer menu
+  app.post('/api/public/restaurants/:restaurantId/table-sessions', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      const { tableId, partySize, status } = req.body;
+      
+      if (!tableId || isNaN(parseInt(tableId))) {
+        return res.status(400).json({ message: 'Valid table ID is required' });
+      }
+
+      const session = await storage.createTableSession({
+        restaurantId,
+        tableId: parseInt(tableId),
+        partySize: partySize || 1,
+        status: status || 'active',
+        sessionName: null,
+        splitType: 'individual'
+      });
+
+      return res.status(201).json(session);
+    } catch (error) {
+      console.error('Error creating table session:', error);
+      return res.status(500).json({ message: 'Failed to create table session' });
+    }
+  });
+
+  // Public customers endpoint for customer menu
+  app.post('/api/public/restaurants/:restaurantId/customers', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      const { name, email, phone, tableSessionId, isMainCustomer } = req.body;
+      
+      if (!name || !name.trim()) {
+        return res.status(400).json({ message: 'Customer name is required' });
+      }
+
+      if (!tableSessionId || isNaN(parseInt(tableSessionId))) {
+        return res.status(400).json({ message: 'Valid table session ID is required' });
+      }
+
+      const customer = await storage.createCustomer({
+        tableSessionId: parseInt(tableSessionId),
+        name: name.trim(),
+        email: email?.trim() || null,
+        phone: phone?.trim() || null,
+        isMainCustomer: isMainCustomer || false
+      });
+
+      return res.status(201).json(customer);
+    } catch (error) {
+      console.error('Error creating customer:', error);
+      return res.status(500).json({ message: 'Failed to create customer' });
+    }
+  });
+
+  // Public get customers for table session endpoint
+  app.get('/api/public/restaurants/:restaurantId/table-sessions/:sessionId/customers', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const sessionId = parseInt(req.params.sessionId);
+      
+      if (isNaN(restaurantId) || isNaN(sessionId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or session ID' });
+      }
+
+      const customers = await storage.getCustomersByTableSessionId(sessionId);
+      return res.json(customers);
+    } catch (error) {
+      console.error('Error fetching customers:', error);
+      return res.status(500).json({ message: 'Failed to fetch customers' });
+    }
+  });
+
   app.post('/api/restaurants/:restaurantId/menu-items', authenticate, authorizeRestaurant, async (req, res) => {
     try {
       const restaurantId = parseInt(req.params.restaurantId);
@@ -840,6 +978,367 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(500).json({ message: 'Failed to fetch popular items' });
     }
   });
+
+  // Menu Analytics Endpoint for AI Insights
+  app.get('/api/restaurants/:restaurantId/analytics/menu', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      const timeframe = req.query.timeframe as 'day' | 'week' | 'month' || 'day';
+      
+      // Calculate date range based on timeframe
+      const now = new Date();
+      let startDate: Date;
+      
+      switch (timeframe) {
+        case 'day':
+          startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+          break;
+        case 'week':
+          startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          break;
+        case 'month':
+          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+          break;
+        default:
+          startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      }
+
+      // Get menu items with analytics
+      const menuItems = await storage.getMenuItems(restaurantId);
+      const orders = await storage.getOrdersByRestaurantId(restaurantId);
+      
+      // Filter orders by timeframe
+      const filteredOrders = orders.filter(order => {
+        const orderDate = new Date(order.createdAt);
+        return orderDate >= startDate && orderDate <= now;
+      });
+
+      // Get order items for filtered orders
+      const orderItemsPromises = filteredOrders.map(order => storage.getOrderItemsByOrderId(order.id));
+      const orderItemsArrays = await Promise.all(orderItemsPromises);
+      const orderItems = orderItemsArrays.flat();
+
+      // Calculate analytics for each menu item
+      const menuAnalyticsPromises = menuItems.map(async (item) => {
+        const itemOrders = orderItems.filter(orderItem => orderItem.menuItemId === item.id);
+        const count = itemOrders.reduce((sum: number, orderItem) => sum + orderItem.quantity, 0);
+        const revenue = itemOrders.reduce((sum: number, orderItem) => sum + (parseFloat(orderItem.price) * orderItem.quantity), 0);
+        
+        // Calculate growth (simplified - compare with previous period)
+        const previousStartDate = new Date(startDate.getTime() - (now.getTime() - startDate.getTime()));
+        const previousOrders = orders.filter(order => {
+          const orderDate = new Date(order.createdAt);
+          return orderDate >= previousStartDate && orderDate < startDate;
+        });
+        const previousOrderItemsPromises = previousOrders.map(order => storage.getOrderItemsByOrderId(order.id));
+        const previousOrderItemsArrays = await Promise.all(previousOrderItemsPromises);
+        const previousOrderItems = previousOrderItemsArrays.flat();
+        const previousItemOrders = previousOrderItems.filter(orderItem => orderItem.menuItemId === item.id);
+        const previousCount = previousItemOrders.reduce((sum: number, orderItem) => sum + orderItem.quantity, 0);
+        
+        const growth = previousCount > 0 ? ((count - previousCount) / previousCount) * 100 : 0;
+        
+        return {
+          id: item.id,
+          name: item.name,
+          count,
+          revenue,
+          category: item.category || 'Uncategorized',
+          trend: growth > 5 ? 'up' : growth < -5 ? 'down' : 'stable',
+          growth: Math.round(growth * 100) / 100
+        };
+      });
+      
+      const menuAnalytics = await Promise.all(menuAnalyticsPromises);
+
+      // Sort by count to get top and low selling items
+      const sortedItems = menuAnalytics.sort((a, b) => b.count - a.count);
+      const topSelling = sortedItems.slice(0, 5);
+      const lowSelling = sortedItems.slice(-5).reverse();
+
+      // Calculate category breakdown
+      const categoryMap = new Map<string, { count: number; revenue: number }>();
+      menuAnalytics.forEach(item => {
+        const category = item.category;
+        const existing = categoryMap.get(category) || { count: 0, revenue: 0 };
+        categoryMap.set(category, {
+          count: existing.count + item.count,
+          revenue: existing.revenue + item.revenue
+        });
+      });
+
+      const categoryBreakdown = Array.from(categoryMap.entries()).map(([category, data]) => ({
+        category,
+        count: data.count,
+        revenue: data.revenue
+      }));
+
+      // Generate AI recommendations
+      const recommendations: Array<{
+        item: string;
+        action: 'promote' | 'remove' | 'adjust_price';
+        reason: string;
+      }> = [];
+      
+      // Recommend promoting top performers
+      topSelling.slice(0, 2).forEach(item => {
+        if (item.growth > 10) {
+          recommendations.push({
+            item: item.name,
+            action: 'promote',
+            reason: `High performer with ${item.growth}% growth. Consider featuring this item prominently.`
+          });
+        }
+      });
+
+      // Recommend removing or adjusting low performers
+      lowSelling.slice(0, 2).forEach(item => {
+        if (item.count === 0) {
+          recommendations.push({
+            item: item.name,
+            action: 'remove',
+            reason: 'No orders in this period. Consider removing from menu or adjusting pricing.'
+          });
+        } else if (item.growth < -20) {
+          recommendations.push({
+            item: item.name,
+            action: 'adjust_price',
+            reason: `Declining performance (${item.growth}% growth). Consider price adjustment or promotion.`
+          });
+        }
+      });
+
+      return res.json({
+        topSelling,
+        lowSelling,
+        categoryBreakdown,
+        recommendations
+      });
+    } catch (error) {
+      console.error('Error fetching menu analytics:', error);
+      return res.status(500).json({ message: 'Failed to fetch menu analytics' });
+    }
+  });
+
+  // Demand Prediction Endpoint for AI Insights
+  app.get('/api/restaurants/:restaurantId/analytics/demand-prediction', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      const timeframe = req.query.timeframe as 'day' | 'week' | 'month' || 'day';
+      const now = new Date();
+      let startDate: Date;
+      switch (timeframe) {
+        case 'day':
+          startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+          break;
+        case 'week':
+          startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          break;
+        case 'month':
+          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+          break;
+        default:
+          startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      }
+
+      // Get menu items
+      const menuItems = await storage.getMenuItems(restaurantId);
+      
+      // Get orders for the selected timeframe
+      const orders = await storage.getOrdersByRestaurantId(restaurantId);
+      const filteredOrders = orders.filter(order => {
+        const orderDate = new Date(order.createdAt);
+        return orderDate >= startDate && orderDate <= now;
+      });
+
+      // Get order items for filtered orders
+      const orderItems = await Promise.all(
+        filteredOrders.map(order => storage.getOrderItemsByOrderId(order.id))
+      );
+
+      // Generate demand predictions for each menu item
+      const demandPredictions = menuItems.slice(0, 6).map(item => {
+        const itemOrders = orderItems.flat().filter(orderItem => orderItem.menuItemId === item.id);
+        const totalQuantity = itemOrders.reduce((sum: number, orderItem) => sum + orderItem.quantity, 0);
+        
+        // Simple prediction based on historical data
+        const avgDailyDemand = totalQuantity / 30;
+        const predictedDemand = Math.round(avgDailyDemand * 1.1); // 10% growth assumption
+        
+        // Calculate confidence based on data consistency
+        const confidence = Math.min(95, Math.max(60, 80 + (totalQuantity / 10)));
+        
+        // Determine trend based on recent performance
+        const recentWeek = new Date();
+        recentWeek.setDate(recentWeek.getDate() - 7);
+        const recentItemOrders = itemOrders.filter(orderItem => {
+          const order = orders.find((o: any) => o.id === orderItem.orderId);
+          return order && new Date(order.createdAt) >= recentWeek;
+        });
+        const recentQuantity = recentItemOrders.reduce((sum: number, orderItem) => sum + orderItem.quantity, 0);
+        const previousWeekQuantity = totalQuantity - recentQuantity;
+        
+        const trend = recentQuantity > previousWeekQuantity ? 'up' : 
+                     recentQuantity < previousWeekQuantity ? 'down' : 'stable';
+        
+        // Generate peak hours (simplified)
+        const peakHours = ['12:00 PM', '1:00 PM', '7:00 PM', '8:00 PM'];
+        
+        return {
+          item: item.name,
+          predictedDemand,
+          confidence: Math.round(confidence),
+          peakHours,
+          trend
+        };
+      });
+
+      return res.json(demandPredictions);
+    } catch (error) {
+      console.error('Error generating demand predictions:', error);
+      return res.status(500).json({ message: 'Failed to generate demand predictions' });
+    }
+  });
+
+  // Food Pairings Analytics
+  app.get('/api/restaurants/:restaurantId/analytics/food-pairings', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      const timeframe = req.query.timeframe as 'day' | 'week' | 'month' || 'day';
+      const now = new Date();
+      let startDate: Date;
+      switch (timeframe) {
+        case 'day':
+          startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+          break;
+        case 'week':
+          startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          break;
+        case 'month':
+          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+          break;
+        default:
+          startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      }
+
+      const orders = await storage.getOrdersByRestaurantId(restaurantId);
+      const menuItems = await storage.getMenuItems(restaurantId);
+      if (!orders || orders.length === 0 || !menuItems || menuItems.length === 0) {
+        return res.json({
+          topPairings: [],
+          recommendations: [],
+          totalOrders: orders ? orders.length : 0,
+          totalPairings: 0
+        });
+      }
+
+      // Filter orders by timeframe
+      const filteredOrders = orders.filter(order => {
+        const orderDate = new Date(order.createdAt);
+        return orderDate >= startDate && orderDate <= now;
+      });
+
+      // Fetch all order items for the restaurant in one query
+      const allOrderItems = await storage.getOrderItemsByRestaurantId(restaurantId) as { orderItems: OrderItem, orders: Order }[];
+      // Group order items by orderId
+      const orderItemsByOrderId: Map<number, OrderItem[]> = new Map();
+      for (const item of allOrderItems) {
+        const orderId = item.orderItems.orderId;
+        if (!orderItemsByOrderId.has(orderId)) orderItemsByOrderId.set(orderId, []);
+        orderItemsByOrderId.get(orderId)!.push(item.orderItems);
+      }
+
+      // Create a map of menu item names
+      const menuItemMap = new Map(menuItems.map(item => [item.id, item.name]));
+
+      // Analyze food pairings
+      const pairings = new Map<string, number>();
+
+      // For each filtered order, find all combinations of items ordered together
+      for (const order of filteredOrders) {
+        const orderItemsForOrder = orderItemsByOrderId.get(order.id) || [];
+        if (orderItemsForOrder.length < 2) continue;
+
+        // Get all unique item IDs in this order
+        const itemIds = [...new Set(orderItemsForOrder.map(item => item.menuItemId))];
+        
+        // Generate all possible pairs
+        for (let i = 0; i < itemIds.length; i++) {
+          for (let j = i + 1; j < itemIds.length; j++) {
+            const item1Name = menuItemMap.get(itemIds[i]);
+            const item2Name = menuItemMap.get(itemIds[j]);
+            if (item1Name && item2Name) {
+              const pairKey = [item1Name, item2Name].sort().join(' + ');
+              pairings.set(pairKey, (pairings.get(pairKey) || 0) + 1);
+            }
+          }
+        }
+      }
+
+      // Convert to array and sort by frequency
+      const topPairings = Array.from(pairings.entries())
+        .map(([pair, count]) => ({
+          pair,
+          count,
+          items: pair.split(' + '),
+          percentage: Math.round((count / filteredOrders.length) * 100)
+        }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 10);
+
+      // Generate recommendations based on pairings
+      const recommendations = [];
+      
+      // Recommend promoting popular pairings
+      topPairings.slice(0, 3).forEach(pairing => {
+        if (pairing.count >= 3) {
+          recommendations.push({
+            type: 'combo_meal',
+            items: pairing.items,
+            reason: `Popular pairing ordered ${pairing.count} times. Consider creating a combo meal.`,
+            potential_revenue: pairing.count * 2 // Estimate additional revenue
+          });
+        }
+      });
+
+      // Find items that are rarely paired
+      const allItems = new Set(menuItems.map(item => item.name));
+      const pairedItems = new Set(topPairings.flatMap(p => p.items));
+      const unpairedItems = Array.from(allItems).filter(item => !pairedItems.has(item));
+
+      if (unpairedItems.length > 0) {
+        recommendations.push({
+          type: 'suggest_pairing',
+          items: unpairedItems.slice(0, 3),
+          reason: 'These items are rarely ordered together. Consider suggesting pairings to customers.',
+          potential_revenue: unpairedItems.length * 1.5
+        });
+      }
+
+      return res.json({
+        topPairings,
+        recommendations,
+        totalOrders: filteredOrders.length,
+        totalPairings: pairings.size
+      });
+    } catch (error) {
+      console.error('Error analyzing food pairings:', error);
+      return res.status(500).json({ message: 'Failed to analyze food pairings' });
+    }
+  });
+
   console.log("Analytics routes set up successfully");
 
   // Feedback Routes
@@ -953,6 +1452,208 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
   console.log("Stripe webhook handler set up successfully");
+
+  // AI Insights Endpoints
+  app.get('/api/restaurants/:restaurantId/ai-insights', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) return res.status(400).json({ message: 'Invalid restaurant ID' });
+      
+      // Convert query params to Date objects if they exist
+      const dateRange = req.query.startDate && req.query.endDate ? {
+        startDate: new Date(req.query.startDate as string),
+        endDate: new Date(req.query.endDate as string)
+      } : undefined;
+
+      const insights = await storage.getAiInsightsByRestaurantId(restaurantId);
+      
+      // Filter insights by date range if provided
+      const filteredInsights = dateRange
+        ? insights.filter(insight => {
+            const insightDate = new Date(insight.createdAt);
+            return insightDate >= dateRange.startDate && insightDate <= dateRange.endDate;
+          })
+        : insights;
+
+      return res.json(filteredInsights);
+    } catch (error) {
+      console.error('Error fetching AI insights:', error);
+      return res.status(500).json({ message: 'Failed to fetch AI insights' });
+    }
+  });
+
+  app.post('/api/restaurants/:restaurantId/ai-insights/generate', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) return res.status(400).json({ message: 'Invalid restaurant ID' });
+
+      // Check if restaurant exists
+      const restaurant = await storage.getRestaurant(restaurantId);
+      if (!restaurant) {
+        return res.status(404).json({ message: 'Restaurant not found' });
+      }
+
+      // Generate insights
+      const insights = await generateRestaurantInsights(restaurantId);
+      if (!insights || insights.length === 0) {
+        return res.status(500).json({ 
+          message: 'No insights could be generated',
+          details: !process.env.GEMINI_API_KEY ? 'AI service not configured' : undefined
+        });
+      }
+
+      return res.json(insights);
+    } catch (error) {
+      console.error('Error generating AI insights:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      return res.status(500).json({ 
+        message: 'Failed to generate AI insights',
+        error: process.env.NODE_ENV === 'development' ? errorMessage : undefined
+      });
+    }
+  });
+
+  app.put('/api/restaurants/:restaurantId/ai-insights/:insightId/read', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const insightId = parseInt(req.params.insightId);
+      if (isNaN(restaurantId) || isNaN(insightId)) return res.status(400).json({ message: 'Invalid ID' });
+      await storage.markAiInsightAsRead(insightId);
+      return res.json({ success: true });
+    } catch (error) {
+      console.error('Error marking AI insight as read:', error);
+      return res.status(500).json({ message: 'Failed to mark as read' });
+    }
+  });
+
+  app.put('/api/restaurants/:restaurantId/ai-insights/:insightId/status', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const insightId = parseInt(req.params.insightId);
+      const { status } = req.body;
+      if (isNaN(restaurantId) || isNaN(insightId) || !status) return res.status(400).json({ message: 'Invalid request' });
+      await storage.updateAiInsightStatus(insightId, status);
+      return res.json({ success: true });
+    } catch (error) {
+      console.error('Error updating AI insight status:', error);
+      return res.status(500).json({ message: 'Failed to update status' });
+    }
+  });
+
+  // AI Stats Endpoint
+  app.get('/api/restaurants/:restaurantId/ai-stats', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      // Get insights count and status
+      const insights = await storage.getAiInsightsByRestaurantId(restaurantId);
+      const newInsights = insights.filter(insight => !insight.isRead).length;
+      const pendingRecommendations = insights.filter(insight => insight.implementationStatus === 'pending').length;
+
+      // Get active chat sessions (sessions from the last 24 hours)
+      // TODO: Implement real chat session tracking in the future
+      // For now, return 0 for chatSessions (not dummy data)
+      const chatStats = {
+        aiInsightsAvailable: newInsights,
+        chatSessions: 0,
+        recommendations: pendingRecommendations
+      };
+      return res.json(chatStats);
+    } catch (error) {
+      console.error('Error fetching AI stats:', error);
+      return res.status(500).json({ message: 'Failed to fetch AI stats' });
+    }
+  });
+
+  // AI Chat Endpoints
+  app.post('/api/restaurants/:restaurantId/ai-chat', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      // Validate chat request body
+      if (!req.body.message) {
+        return res.status(400).json({ message: 'Message is required' });
+      }
+
+      // Format the request according to the expected schema
+      const chatRequest = {
+        message: req.body.message,
+        context: {
+          restaurantId,
+          timeframe: '30d' // default to last 30 days
+        }
+      };
+
+      const reply = await handleRestaurantChat(chatRequest);
+      return res.json({ reply });
+    } catch (error) {
+      console.error('AI Chat error:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      return res.status(500).json({ 
+        message: 'Failed to get AI response',
+        error: process.env.NODE_ENV === 'development' ? errorMessage : undefined
+      });
+    }
+  });
+
+  app.post('/api/restaurants/:restaurantId/analytics/ai-insights', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) return res.status(400).json({ message: 'Invalid restaurant ID' });
+
+      const validation = dateRangeSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ errors: validation.error.errors });
+      }
+
+      const { startDate, endDate } = validation.data;
+      const insights = await generateAnalyticsInsights({ restaurantId, startDate, endDate });
+      return res.json(insights);
+    } catch (error) {
+      console.error('Error generating analytics AI insights:', error);
+      return res.status(500).json({ message: 'Failed to generate analytics AI insights' });
+    }
+  });
+
+  // Get all orders for a table session (batch fetch for billing)
+  app.get('/api/restaurants/:restaurantId/table-sessions/:tableSessionId/orders', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const tableSessionId = parseInt(req.params.tableSessionId);
+      if (isNaN(restaurantId) || isNaN(tableSessionId)) {
+        return res.status(400).json({ message: 'Invalid restaurant or table session ID' });
+      }
+      const orders = await storage.getOrdersByTableSessionId(tableSessionId);
+      return res.json(orders);
+    } catch (error) {
+      console.error('Error fetching orders for table session:', error);
+      return res.status(500).json({ message: 'Failed to fetch orders for table session' });
+    }
+  });
+
+  // Get bills for a table session (with pagination)
+  app.get('/api/restaurants/:restaurantId/table-sessions/:tableSessionId/bills', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const tableSessionId = parseInt(req.params.tableSessionId);
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 30;
+      const offset = req.query.offset ? parseInt(req.query.offset as string) : 0;
+      if (isNaN(restaurantId) || isNaN(tableSessionId)) {
+        return res.status(400).json({ message: 'Invalid restaurant or table session ID' });
+      }
+      const bills = await storage.getBillsByTableSessionId(tableSessionId, limit, offset);
+      return res.json(bills);
+    } catch (error) {
+      console.error('Error fetching bills for table session:', error);
+      return res.status(500).json({ message: 'Failed to fetch bills for table session' });
+    }
+  });
 
   // Create HTTP server
   console.log("Creating HTTP server...");

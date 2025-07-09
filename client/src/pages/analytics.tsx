@@ -12,6 +12,8 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { AIInsights } from "@/components/dashboard/ai-insights";
+import { NewAIInsights } from "@/components/dashboard/new-ai-insights-fixed";
+import { RestaurantAnalytics } from "@/components/dashboard/restaurant-analytics";
 import { AIChatbox } from "@/components/dashboard/ai-chatbox";
 
 // Define the type of analytics data
@@ -126,9 +128,10 @@ export default function Analytics() {
       allowedRoles={['restaurant']}
     >
       <Tabs defaultValue="analytics" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="analytics">{t("analytics", "Analytics")}</TabsTrigger>
           <TabsTrigger value="ai-insights">{t("aiInsights", "AI Insights")}</TabsTrigger>
+          <TabsTrigger value="restaurant-analytics">{t("restaurantAnalytics", "Restaurant Analytics")}</TabsTrigger>
           <TabsTrigger value="ai-assistant">{t("aiAssistant", "AI Assistant")}</TabsTrigger>
         </TabsList>
 
@@ -354,6 +357,16 @@ export default function Analytics() {
           ) : (
             <div className="flex justify-center items-center py-12">
               <p className="text-gray-500">Please log in to view AI insights.</p>
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="restaurant-analytics">
+          {restaurantId ? (
+            <NewAIInsights restaurantId={restaurantId} />
+          ) : (
+            <div className="flex justify-center items-center py-12">
+              <p className="text-gray-500">Please log in to view restaurant analytics.</p>
             </div>
           )}
         </TabsContent>

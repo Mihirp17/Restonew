@@ -5,6 +5,28 @@ import { z } from 'zod';
 // Initialize Gemini AI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
+const insightSchema = z.object({
+  type: z.enum(["revenue", "menu", "customer_satisfaction", "operations", "marketing"]),
+  title: z.string(),
+  description: z.string(),
+  recommendations: z.array(z.string()),
+  confidence: z.number().min(0).max(1),
+  priority: z.enum(["high", "medium", "low"]),
+  dataSource: z.object({
+    metrics: z.array(z.string()),
+    timeframe: z.string(),
+  }),
+});
+
+const analyticsInsightSchema = z.object({
+  performanceSummary: z.string(),
+  recommendations: z.array(z.string()),
+  popularItemsAnalysis: z.string(),
+  customerSatisfaction: z.string(),
+  growthOpportunities: z.array(z.string()),
+});
+
+
 // AI Insight types
 export interface AIInsight {
   id?: number;
@@ -12,8 +34,11 @@ export interface AIInsight {
   type: string;
   title: string;
   description: string;
-  recommendations: any;
-  dataSource: any;
+  recommendations: string[];
+  dataSource: {
+    metrics: string[];
+    timeframe: string;
+  };
   confidence: number;
   priority: 'low' | 'medium' | 'high' | 'critical';
   isRead: boolean;
@@ -105,7 +130,7 @@ ${JSON.stringify(context, null, 2)}
 Please provide insights in this exact JSON format:
 [
   {
-    "type": "revenue" | "menu" | "customer_satisfaction" | "operations" | "marketing",
+    "type": "revenue",
     "title": "Clear, actionable insight title",
     "description": "Detailed explanation of the insight and its implications",
     "recommendations": [
@@ -113,7 +138,7 @@ Please provide insights in this exact JSON format:
       "Specific action item 2"
     ],
     "confidence": 0.85,
-    "priority": "high" | "medium" | "low",
+    "priority": "high",
     "dataSource": {
       "metrics": ["relevant", "metrics", "used"],
       "timeframe": "30 days"
@@ -135,7 +160,17 @@ Focus on practical, implementable recommendations that can improve the restauran
         throw new Error('No valid JSON found in response');
       }
 
-      const insights = JSON.parse(jsonMatch[0]);
+      const parsedJson = JSON.parse(jsonMatch[0]);
+
+      const validationResult = z.array(insightSchema).safeParse(parsedJson);
+
+      if (!validationResult.success) {
+        console.error("AI response validation failed:", validationResult.error);
+        console.error("Raw AI response:", parsedJson);
+        throw new Error('AI response does not match expected schema.');
+      }
+      
+      const insights = validationResult.data;
       
       // Convert to our format and save to database
       const aiInsights: AIInsight[] = insights.map((insight: any) => ({
@@ -272,56 +307,121 @@ export async function handleRestaurantChat(message: ChatMessage): Promise<string
       throw new Error('Restaurant not found');
     }
 
-    // Gather relevant data based on the question
-    const [orders, menuItems, feedback] = await Promise.all([
+    // Gather comprehensive data based on the question
+    const [
+      orders,
+      menuItems,
+      feedback,
+      popularItems,
+      activeOrders,
+      tables
+    ] = await Promise.all([
       storage.getOrdersByRestaurantId(restaurantId),
       storage.getMenuItems(restaurantId),
-      storage.getFeedbackByRestaurantId(restaurantId)
+      storage.getFeedbackByRestaurantId(restaurantId),
+      storage.getPopularMenuItems(restaurantId, 10),
+      storage.getActiveOrdersByRestaurantId(restaurantId, 10),
+      storage.getTablesByRestaurantId(restaurantId)
     ]);
 
-    // Calculate recent metrics
-    const recentOrders = orders.filter(order => {
-      const orderDate = new Date(order.createdAt);
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      return orderDate >= thirtyDaysAgo;
-    });
+    // Calculate recent metrics with more granular timeframes
+    const now = new Date();
+    const recentOrders = {
+      last24h: orders.filter(order => {
+        const orderDate = new Date(order.createdAt);
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        return orderDate >= yesterday;
+      }),
+      last7d: orders.filter(order => {
+        const orderDate = new Date(order.createdAt);
+        const lastWeek = new Date(now);
+        lastWeek.setDate(lastWeek.getDate() - 7);
+        return orderDate >= lastWeek;
+      }),
+      last30d: orders.filter(order => {
+        const orderDate = new Date(order.createdAt);
+        const thirtyDaysAgo = new Date(now);
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        return orderDate >= thirtyDaysAgo;
+      })
+    };
 
-    const totalRevenue = recentOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
-    const averageOrderValue = recentOrders.length > 0 ? totalRevenue / recentOrders.length : 0;
+    // Calculate metrics for different time periods
+    const calculateMetrics = (orders: any[]) => {
+      const totalRevenue = orders.reduce((sum: number, order: any) => sum + parseFloat(order.total), 0);
+      const averageOrderValue = orders.length > 0 ? totalRevenue / orders.length : 0;
+      return {
+        totalOrders: orders.length,
+        totalRevenue: totalRevenue.toFixed(2),
+        averageOrderValue: averageOrderValue.toFixed(2)
+      };
+    };
+
+    const metrics = {
+      last24h: calculateMetrics(recentOrders.last24h),
+      last7d: calculateMetrics(recentOrders.last7d),
+      last30d: calculateMetrics(recentOrders.last30d)
+    };
 
     const restaurantContext = {
       restaurant: {
         name: restaurant.name,
-        description: restaurant.description
+        description: restaurant.description,
       },
       currentMetrics: {
-        totalOrders: recentOrders.length,
-        totalRevenue: totalRevenue.toFixed(2),
-        averageOrderValue: averageOrderValue.toFixed(2),
+        ...metrics.last30d,
         menuItems: menuItems.length,
-        averageRating: feedback.length > 0 ? (feedback.reduce((sum, f) => sum + f.rating, 0) / feedback.length).toFixed(1) : 'N/A'
-      }
+        averageRating: feedback.length > 0 ? 
+          (feedback.reduce((sum, f) => sum + f.rating, 0) / feedback.length).toFixed(1) : 
+          'N/A',
+        activeOrders: activeOrders.length,
+        occupiedTables: tables.filter(t => t.isOccupied).length,
+        totalTables: tables.length
+      },
+      metrics,
+      popularItems: popularItems.map(item => ({
+        name: item.name,
+        orderCount: item.count,
+        revenue: parseFloat(item.price) * item.count
+      })),
+      recentFeedback: feedback
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, 5)
+        .map(f => ({
+          rating: f.rating,
+          comment: f.comment,
+          createdAt: f.createdAt
+        }))
     };
 
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
     const prompt = `
-You are an AI assistant helping restaurant owners understand their business data and make informed decisions.
+You are an expert AI restaurant consultant helping owners understand their business data and make informed decisions.
 
 Restaurant Context:
 ${JSON.stringify(restaurantContext, null, 2)}
 
 User Question: "${userMessage}"
 
-Please provide a helpful, specific response that:
-1. Directly addresses the user's question
-2. Uses the restaurant's actual data when relevant
-3. Provides actionable insights or recommendations
-4. Keeps the response concise but informative (max 3 paragraphs)
-5. Speaks in a friendly, professional tone
+Please provide a data-driven response that:
+1. Addresses the question using specific metrics and trends
+2. Compares data across different timeframes (24h vs 7d vs 30d) when relevant
+3. References popular items, customer feedback, and operational metrics
+4. Provides 2-3 concrete, actionable recommendations
+5. Keeps the response concise but comprehensive (max 3 paragraphs)
+6. Uses a professional, consultative tone
+7. Includes exact numbers and percentages when discussing metrics
 
-If the question requires data not available in the context, explain what additional information would be helpful.
+Guidelines:
+- Always compare trends across timeframes to identify patterns
+- Reference specific menu items and their performance when relevant
+- Use customer feedback quotes to support recommendations
+- Consider table occupancy and operational efficiency
+- Make recommendations based on the complete context
+
+If you need additional data not in the context, specify what metrics would help refine the analysis.
 `;
 
     const result = await model.generateContent(prompt);
@@ -386,4 +486,70 @@ export async function updateInsightStatus(insightId: number, status: string): Pr
     console.error('Error updating insight status:', error);
     return false;
   }
-} 
+}
+
+export async function generateAnalyticsInsights({ restaurantId, startDate, endDate }: { restaurantId: number, startDate: Date, endDate: Date }) {
+  if (!process.env.GEMINI_API_KEY) {
+    console.warn("GEMINI_API_KEY not set, returning mock analytics insights.");
+    return {
+      performanceSummary: "Mock performance summary.",
+      recommendations: ["Mock recommendation 1", "Mock recommendation 2"],
+      popularItemsAnalysis: "Mock popular items analysis.",
+      customerSatisfaction: "Mock customer satisfaction.",
+      growthOpportunities: ["Mock growth opportunity 1"],
+    };
+  }
+
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+  const restaurant = await storage.getRestaurant(restaurantId);
+  const orders = await storage.getOrdersByRestaurantId(restaurantId, { startDate, endDate });
+  const feedback = await storage.getFeedbackByRestaurantId(restaurantId, { startDate, endDate });
+  const popularItems = await storage.getPopularMenuItems(restaurantId, 5, { startDate, endDate });
+
+  const totalRevenue = orders.reduce((acc, order) => acc + parseFloat(order.total), 0);
+  const averageRating = feedback.length > 0 ? feedback.reduce((acc, f) => acc + f.rating, 0) / feedback.length : 0;
+
+  const prompt = `
+    Analyze the following restaurant data for ${restaurant?.name} from ${startDate.toLocaleDateString()} to ${endDate.toLocaleDateString()}.
+
+    Data:
+    - Total Revenue: $${totalRevenue.toFixed(2)}
+    - Total Orders: ${orders.length}
+    - Average Customer Rating: ${averageRating.toFixed(2)}/5
+    - Most Popular Items: ${popularItems.map(item => item.name).join(", ")}
+
+    Provide a detailed analysis in this exact JSON format:
+    {
+      "performanceSummary": "A summary of the restaurant's performance.",
+      "recommendations": ["Actionable recommendation 1", "Actionable recommendation 2"],
+      "popularItemsAnalysis": "Analysis of the most popular items.",
+      "customerSatisfaction": "Analysis of customer satisfaction based on ratings.",
+      "growthOpportunities": ["Growth opportunity 1", "Growth opportunity 2"]
+    }
+  `;
+
+  try {
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+
+    const jsonMatch = text.match(/{[\s\S]*}/);
+    if (!jsonMatch) {
+      throw new Error("No valid JSON found in AI response.");
+    }
+
+    const parsedJson = JSON.parse(jsonMatch[0]);
+    const validationResult = analyticsInsightSchema.safeParse(parsedJson);
+
+    if (!validationResult.success) {
+      console.error("AI analytics response validation failed:", validationResult.error);
+      throw new Error("AI response does not match the expected schema.");
+    }
+
+    return validationResult.data;
+  } catch (error) {
+    console.error("Error generating analytics insights:", error);
+    throw new Error("Failed to generate AI-powered analytics insights.");
+  }
+}

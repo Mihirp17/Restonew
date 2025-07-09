@@ -4,6 +4,7 @@ import { StatsCard } from "@/components/dashboard/stats-card";
 import { LiveOrders } from "@/components/dashboard/live-orders";
 import { TablesOverview } from "@/components/dashboard/tables-overview";
 import { PopularItems } from "@/components/dashboard/popular-items";
+import { NewAIInsights } from "@/components/dashboard/new-ai-insights-fixed";
 import { StaffOrderDialog } from "@/components/menu/staff-order-dialog";
 import { CustomerNamesDialog } from "@/components/orders/customer-names-dialog";
 import { useAuth } from "@/hooks/use-auth";
@@ -379,6 +380,9 @@ export default function Dashboard() {
           <TablesOverview restaurantId={restaurantId} />
           <PopularItems restaurantId={restaurantId} />
         </div>
+
+        {/* AI Insights Section */}
+        <NewAIInsights restaurantId={restaurantId} />
       </div>
 
       {/* Waiter Request Details Dialog */}

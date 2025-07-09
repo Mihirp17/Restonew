@@ -11,14 +11,25 @@ interface LiveOrdersProps {
   restaurantId?: number;
 }
 
+interface OrderType {
+  id: number;
+  orderNumber?: string;
+  status: 'pending' | 'confirmed' | 'preparing' | 'served' | 'completed' | 'cancelled';
+  total: string;
+  createdAt: string | Date;
+  customerName?: string;
+  tableNumber?: number;
+  groupId?: number;
+}
+
 // Memoized order card component to prevent unnecessary re-renders
 const OrderCard = memo(({ 
   order, 
   onUpdateStatus, 
   t 
 }: { 
-  order: any; 
-  onUpdateStatus: (orderId: number, status: string) => void; 
+  order: OrderType; 
+  onUpdateStatus: (orderId: number, status: string) => Promise<void>; 
   t: any;
 }) => {
   const statusColors = useMemo(() => getStatusColor(order.status), [order.status]);
@@ -121,7 +132,7 @@ export const LiveOrders = memo(({ restaurantId }: LiveOrdersProps) => {
   const { activeOrders, updateOrderStatus, isLoading } = useOrders(restaurantId || 0, { 
     lightweight: true, 
     limit: 10 
-  }) as { activeOrders: any[]; updateOrderStatus: (args: { orderId: number; status: 'pending' | 'confirmed' | 'preparing' | 'served' | 'completed' | 'cancelled' }) => void; isLoading: boolean };
+  }) as { activeOrders: OrderType[]; updateOrderStatus: (args: { orderId: number; status: OrderType['status'] }) => Promise<void>; isLoading: boolean };
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { t } = useLang();
@@ -132,7 +143,7 @@ export const LiveOrders = memo(({ restaurantId }: LiveOrdersProps) => {
   // Handle order status update
   const handleUpdateStatus = useCallback(async (
     orderId: number,
-    status: 'pending' | 'confirmed' | 'preparing' | 'served' | 'completed' | 'cancelled'
+    status: OrderType['status']
   ) => {
     try {
       await updateOrderStatus({ orderId, status });

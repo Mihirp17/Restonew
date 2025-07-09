@@ -55,7 +55,7 @@ export interface IStorage {
   
   // Order Methods
   getOrder(id: number): Promise<Order | undefined>;
-  getOrdersByRestaurantId(restaurantId: number): Promise<Order[]>;
+  getOrdersByRestaurantId(restaurantId: number, options?: { startDate?: Date, endDate?: Date }): Promise<Order[]>;
   getActiveOrdersByRestaurantId(restaurantId: number, limit?: number): Promise<Order[]>;
   getActiveOrdersLightweight(restaurantId: number, limit?: number): Promise<{id: number, orderNumber: string, status: string, total: string, createdAt: Date, customerName?: string, tableNumber?: number}[]>;
   getActiveOrdersThin(restaurantId: number, limit?: number): Promise<{id: number, orderNumber: string, status: string, total: string, createdAt: Date, customerName: string, tableNumber: number}[]>;
@@ -79,14 +79,14 @@ export interface IStorage {
   
   // Feedback Methods
   getFeedback(id: number): Promise<Feedback | undefined>;
-  getFeedbackByRestaurantId(restaurantId: number): Promise<Feedback[]>;
+  getFeedbackByRestaurantId(restaurantId: number, options?: { startDate?: Date, endDate?: Date }): Promise<Feedback[]>;
   createFeedback(feedback: InsertFeedback): Promise<Feedback>;
 
   // Analytics Methods
   getRestaurantRevenue(restaurantId: number, startDate: Date, endDate: Date): Promise<number>;
   getOrderCountByRestaurantId(restaurantId: number, startDate: Date, endDate: Date): Promise<number>;
   getAverageOrderValue(restaurantId: number, startDate: Date, endDate: Date): Promise<number>;
-  getPopularMenuItems(restaurantId: number, limit: number): Promise<{id: number, name: string, count: number, price: string}[]>;
+  getPopularMenuItems(restaurantId: number, limit: number, options?: { startDate?: Date, endDate?: Date }): Promise<{id: number, name: string, count: number, price: string}[]>;
   
   // Payment related helpers (Stripe removed)
   // updateRestaurantStripeInfo removed - placeholder implementation
@@ -95,6 +95,8 @@ export interface IStorage {
   getAiInsightsByRestaurantId(restaurantId: number): Promise<any[]>;
   createAiInsight(insight: any): Promise<any>;
   updateAiInsight(insightId: number, updates: any): Promise<any>;
+  markAiInsightAsRead(insightId: number): Promise<void>;
+  updateAiInsightStatus(insightId: number, status: string): Promise<void>;
 
   // Table Session Methods
   getTableSession(id: number): Promise<TableSession | undefined>;
@@ -110,7 +112,7 @@ export interface IStorage {
   
   // Bill Methods
   getBill(id: number): Promise<Bill | undefined>;
-  getBillsByRestaurantId(restaurantId: number, status?: string): Promise<Bill[]>;
+  getBillsByRestaurantId(restaurantId: number, status?: string): Promise<any[]>;
   getBillsByTableSessionId(tableSessionId: number): Promise<Bill[]>;
   getBillByCustomerAndSession(customerId: number, tableSessionId: number): Promise<Bill | undefined>;
   createBill(bill: InsertBill): Promise<Bill>;
@@ -123,6 +125,12 @@ export interface IStorage {
 
   // Mock menu items for test restaurant
   getMenuItems(restaurantId: number): Promise<MenuItem[]>;
+
+  // Log or update a chat session for a restaurant
+  logAiChatSession(params: { restaurantId: number, userId?: number, sessionId?: string }): Promise<number | undefined>;
+
+  // Count unique chat sessions for a restaurant in the last 24h
+  countAiChatSessionsLast24h(restaurantId: number): Promise<number>;
 }
 
 // Mock menu items for test restaurant
@@ -412,11 +420,14 @@ export class DatabaseStorage implements IStorage {
     return order;
   }
 
-  async getOrdersByRestaurantId(restaurantId: number): Promise<Order[]> {
-    return await db.select()
-      .from(orders)
-      .where(eq(orders.restaurantId, restaurantId))
-      .orderBy(desc(orders.createdAt));
+  async getOrdersByRestaurantId(restaurantId: number, options: { startDate?: Date, endDate?: Date } = {}): Promise<Order[]> {
+    const { startDate, endDate } = options;
+    const conditions = [eq(orders.restaurantId, restaurantId)];
+    if (startDate && endDate) {
+      conditions.push(sql`${orders.createdAt} BETWEEN ${startDate} AND ${endDate}`);
+    }
+    const query = db.select().from(orders).where(and(...conditions as any)).orderBy(desc(orders.createdAt));
+    return await query;
   }
 
   async getActiveOrdersByRestaurantId(restaurantId: number, limit?: number): Promise<Order[]> {
@@ -569,6 +580,14 @@ export class DatabaseStorage implements IStorage {
     return result.length > 0;
   }
 
+  async getOrderItemsByRestaurantId(restaurantId: number): Promise<{ orderItems: OrderItem, orders: Order }[]> {
+    // Join orderItems with orders to filter by restaurantId
+    return await db.select({ orderItems, orders })
+      .from(orderItems)
+      .innerJoin(orders, eq(orderItems.orderId, orders.id))
+      .where(eq(orders.restaurantId, restaurantId));
+  }
+
   // User Methods
   async getUser(id: number): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
@@ -622,8 +641,14 @@ export class DatabaseStorage implements IStorage {
     return feedbackItem;
   }
 
-  async getFeedbackByRestaurantId(restaurantId: number): Promise<Feedback[]> {
-    return await db.select().from(feedback).where(eq(feedback.restaurantId, restaurantId));
+  async getFeedbackByRestaurantId(restaurantId: number, options: { startDate?: Date, endDate?: Date } = {}): Promise<Feedback[]> {
+    const { startDate, endDate } = options;
+    const conditions = [eq(feedback.restaurantId, restaurantId)];
+    if (startDate && endDate) {
+      conditions.push(sql`${feedback.createdAt} BETWEEN ${startDate} AND ${endDate}`);
+    }
+    const query = db.select().from(feedback).where(and(...conditions as any));
+    return await query;
   }
 
   async createFeedback(feedbackItem: InsertFeedback): Promise<Feedback> {
@@ -701,8 +726,15 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async getPopularMenuItems(restaurantId: number, limit: number): Promise<{id: number, name: string, count: number, price: string}[]> {
+  async getPopularMenuItems(restaurantId: number, limit: number, options: { startDate?: Date, endDate?: Date } = {}): Promise<{id: number, name: string, count: number, price: string}[]> {
+    const { startDate, endDate } = options;
+    
     try {
+      const conditions = [eq(menuItems.restaurantId, restaurantId)];
+      if (startDate && endDate) {
+        conditions.push(sql`${orders.createdAt} BETWEEN ${startDate} AND ${endDate}`);
+      }
+
       const result = await db.select({
         id: menuItems.id,
         name: menuItems.name,
@@ -712,7 +744,7 @@ export class DatabaseStorage implements IStorage {
       .from(menuItems)
       .leftJoin(orderItems, sql`${menuItems.id} = ${orderItems.menuItemId}`)
       .leftJoin(orders, sql`${orderItems.orderId} = ${orders.id} AND ${orders.status} != 'cancelled'`)
-      .where(eq(menuItems.restaurantId, restaurantId))
+      .where(and(...conditions as any))
       .groupBy(menuItems.id, menuItems.name, menuItems.price)
       .orderBy(desc(sql`COUNT(${orderItems.id})`))
       .limit(limit);
@@ -776,6 +808,14 @@ export class DatabaseStorage implements IStorage {
       console.error('Error updating AI insight:', error);
       throw error;
     }
+  }
+
+  async markAiInsightAsRead(insightId: number): Promise<void> {
+    await db.update(aiInsights).set({ isRead: true }).where(eq(aiInsights.id, insightId));
+  }
+
+  async updateAiInsightStatus(insightId: number, status: string): Promise<void> {
+    await db.update(aiInsights).set({ implementationStatus: status }).where(eq(aiInsights.id, insightId));
   }
 
   // Table Session Methods
@@ -899,8 +939,12 @@ export class DatabaseStorage implements IStorage {
     return results.map(r => ({ ...r.bill, customer: r.customer }));
   }
 
-  async getBillsByTableSessionId(tableSessionId: number): Promise<Bill[]> {
-    return await db.select().from(bills).where(eq(bills.tableSessionId, tableSessionId));
+  async getBillsByTableSessionId(tableSessionId: number, limit: number = 30, offset: number = 0): Promise<Bill[]> {
+    return await db.select().from(bills)
+      .where(eq(bills.tableSessionId, tableSessionId))
+      .orderBy(bills.createdAt, 'desc')
+      .limit(limit)
+      .offset(offset);
   }
 
   async getBillByCustomerAndSession(customerId: number, tableSessionId: number): Promise<Bill | undefined> {
@@ -1060,10 +1104,54 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  async getOrdersByTableSessionId(tableSessionId: number): Promise<Order[]> {
+    return await db.select().from(orders).where(eq(orders.tableSessionId, tableSessionId));
+  }
+
   // Mock menu items for test restaurant
   async getMenuItems(restaurantId: number): Promise<MenuItem[]> {
     // Fetch menu items from the database for the given restaurant
     return await db.select().from(menuItems).where(eq(menuItems.restaurantId, restaurantId));
+  }
+
+  // Log or update a chat session for a restaurant
+  async logAiChatSession({ restaurantId, userId, sessionId }: { restaurantId: number, userId?: number, sessionId?: string }): Promise<number | undefined> {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    // Try to find an existing session in the last 24h for this restaurant/user/session
+    const result = await db.execute(
+      sql`SELECT id FROM ai_chat_sessions WHERE restaurant_id = ${restaurantId} AND (user_id = ${userId ?? null} OR session_id = ${sessionId ?? null}) AND last_message_at > ${since} ORDER BY last_message_at DESC LIMIT 1`
+    );
+    const existing = Array.isArray(result) && result[0] && typeof result[0].id === 'number' ? result[0] : undefined;
+    if (existing && existing.id) {
+      await db.execute(
+        sql`UPDATE ai_chat_sessions SET last_message_at = NOW(), message_count = message_count + 1 WHERE id = ${existing.id}`
+      );
+      return existing.id as number;
+    } else {
+      const insertResult = await db.execute(
+        sql`INSERT INTO ai_chat_sessions (restaurant_id, user_id, session_id, created_at, last_message_at, message_count) VALUES (${restaurantId}, ${userId ?? null}, ${sessionId ?? null}, NOW(), NOW(), 1) RETURNING id`
+      );
+      if (Array.isArray(insertResult) && insertResult[0] && typeof insertResult[0].id === 'number') {
+        return insertResult[0].id as number;
+      }
+      return undefined;
+    }
+  }
+
+  // Count unique chat sessions for a restaurant in the last 24h
+  async countAiChatSessionsLast24h(restaurantId: number): Promise<number> {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const result = await db.execute(
+      sql`SELECT COUNT(*)::int AS count FROM ai_chat_sessions WHERE restaurant_id = ${restaurantId} AND last_message_at > ${since}`
+    );
+    if (Array.isArray(result) && result[0] && typeof result[0].count === 'number') {
+      return result[0].count;
+    }
+    if (Array.isArray(result) && result[0] && typeof result[0].count === 'string') {
+      // Some drivers may return count as string
+      return parseInt(result[0].count, 10) || 0;
+    }
+    return 0;
   }
 }
 

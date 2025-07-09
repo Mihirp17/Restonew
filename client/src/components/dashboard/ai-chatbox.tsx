@@ -85,10 +85,8 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
     setIsTyping(true);
 
     try {
-      const response = await apiRequest('POST', `/api/restaurants/${restaurantId}/ai/chat`, {
-        message: content.trim(),
-        timeframe: '30_days',
-        dataTypes: ['orders', 'revenue', 'feedback', 'menu_items']
+      const response = await apiRequest('POST', `/api/restaurants/${restaurantId}/ai-chat`, {
+        message: content.trim()
       });
 
       const data = await response.json();
@@ -97,7 +95,7 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
       setTimeout(() => {
         const aiMessage: Message = {
           id: (Date.now() + 1).toString(),
-          content: data.response,
+          content: data.reply, // Use the correct property from backend
           isUser: false,
           timestamp: new Date()
         };
@@ -184,10 +182,10 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
                 key={message.id}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}
+                className={`flex ${message.isUser ? 'justify-end' : 'justify-start'} w-full`}
               >
                 <div className={`flex items-start space-x-2 max-w-[80%] ${message.isUser ? 'flex-row-reverse space-x-reverse' : ''}`}>
-                  <div className={`flex items-center justify-center w-8 h-8 rounded-full ${
+                  <div className={`flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-full ${
                     message.isUser 
                       ? 'bg-blue-100' 
                       : 'bg-purple-100'
@@ -198,13 +196,13 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
                       <Bot className="h-4 w-4 text-purple-600" />
                     )}
                   </div>
-                  <div className={`flex flex-col ${message.isUser ? 'items-end' : 'items-start'}`}>
-                    <div className={`rounded-lg p-3 ${
+                  <div className={`flex flex-col ${message.isUser ? 'items-end' : 'items-start'} max-w-full overflow-hidden`}>
+                    <div className={`rounded-lg p-3 overflow-hidden ${
                       message.isUser
                         ? 'bg-blue-600 text-white'
                         : 'bg-gray-100 text-gray-900'
                     }`}>
-                      <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                      <p className="text-sm whitespace-pre-wrap break-words overflow-wrap-anywhere">{message.content}</p>
                     </div>
                     <span className="text-xs text-gray-500 mt-1">{formatTime(message.timestamp)}</span>
                   </div>
@@ -247,6 +245,7 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
           <form onSubmit={handleSubmit} className="flex space-x-2">
             <Input
               ref={inputRef}
+              data-chatbox-input
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               placeholder="Ask me anything about your restaurant..."

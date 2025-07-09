@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
 import { useEffect, memo, useMemo, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Table } from "@shared/schema";
+import { Table as TableType } from "@shared/schema";
 import { useLang } from "@/contexts/language-context";
 
 interface TablesOverviewProps {
@@ -16,7 +16,7 @@ const TableCard = memo(({
   onToggleOccupied, 
   t 
 }: { 
-  table: Table; 
+  table: TableType & { groupId?: number; createdAt?: string | Date; updatedAt?: string | Date };
   onToggleOccupied: (tableId: number, isOccupied: boolean) => void; 
   t: any;
 }) => {
@@ -54,12 +54,12 @@ TableCard.displayName = 'TableCard';
 
 export const TablesOverview = memo(function TablesOverview({ restaurantId }: TablesOverviewProps) {
   const queryClient = useQueryClient();
-  const { tables = [], isLoading, updateTable } = useTables(restaurantId || 0);
+  const { tables = [], isLoading, updateTable } = useTables(restaurantId || 0) as { tables: (TableType & { groupId?: number; createdAt?: string | Date; updatedAt?: string | Date })[]; isLoading: boolean; updateTable: (args: { tableId: number; data: Partial<TableType> }) => Promise<void> };
   const { t } = useLang();
 
   // Toggle table occupancy status
-  const handleToggleOccupied = useCallback((tableId: number, isOccupied: boolean) => {
-    updateTable({ tableId, data: { isOccupied: !isOccupied } });
+  const handleToggleOccupied = useCallback(async (tableId: number, isOccupied: boolean) => {
+    await updateTable({ tableId, data: { isOccupied: !isOccupied } });
   }, [updateTable]);
 
   useEffect(() => {

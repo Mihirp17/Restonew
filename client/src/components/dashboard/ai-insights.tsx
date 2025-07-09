@@ -47,6 +47,8 @@ interface AIInsight {
 
 interface AIInsightsProps {
   restaurantId: number;
+  startDate?: Date;
+  endDate?: Date;
 }
 
 const getInsightIcon = (type: string) => {
@@ -107,7 +109,7 @@ const getStatusIcon = (status: string) => {
   }
 };
 
-export function AIInsights({ restaurantId }: AIInsightsProps) {
+export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps) {
   const [insights, setInsights] = useState<AIInsight[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -118,10 +120,13 @@ export function AIInsights({ restaurantId }: AIInsightsProps) {
   // Fetch insights
   const fetchInsights = async () => {
     if (!restaurantId) return;
-    
     try {
       setIsLoading(true);
-      const response = await apiRequest('GET', `/api/restaurants/${restaurantId}/ai-insights`);
+      let url = `/api/restaurants/${restaurantId}/ai-insights`;
+      if (startDate && endDate) {
+        url += `?startDate=${encodeURIComponent(startDate.toISOString())}&endDate=${encodeURIComponent(endDate.toISOString())}`;
+      }
+      const response = await apiRequest('GET', url);
       const data = await response.json();
       setInsights(data);
     } catch (error) {
@@ -210,7 +215,7 @@ export function AIInsights({ restaurantId }: AIInsightsProps) {
 
   useEffect(() => {
     fetchInsights();
-  }, [restaurantId]);
+  }, [restaurantId, startDate, endDate]);
 
   // Statistics
   const totalInsights = insights.length;

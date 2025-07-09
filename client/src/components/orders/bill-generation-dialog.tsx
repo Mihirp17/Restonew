@@ -76,6 +76,40 @@ export function BillGenerationDialog({
   const [isGenerating, setIsGenerating] = useState(false);
   const { toast } = useToast();
 
+  // Add state for paginated bills
+  const [bills, setBills] = useState<any[]>([]);
+  const [billsOffset, setBillsOffset] = useState(0);
+  const [billsHasMore, setBillsHasMore] = useState(true);
+  const BILLS_PAGE_SIZE = 30;
+
+  // Fetch paginated bills
+  const fetchBills = async (reset = false) => {
+    if (!tableSessionId || !restaurantId) return;
+    const offset = reset ? 0 : billsOffset;
+    const billsData = await apiRequest({
+      method: 'GET',
+      url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}/bills?limit=${BILLS_PAGE_SIZE}&offset=${offset}`
+    });
+    if (reset) {
+      setBills(billsData);
+    } else {
+      setBills(prev => [...prev, ...billsData]);
+    }
+    setBillsHasMore(billsData.length === BILLS_PAGE_SIZE);
+    setBillsOffset(offset + billsData.length);
+  };
+
+  // Fetch bills on dialog open or session change
+  useEffect(() => {
+    if (isOpen) {
+      setBills([]);
+      setBillsOffset(0);
+      setBillsHasMore(true);
+      fetchBills(true);
+    }
+    // eslint-disable-next-line
+  }, [isOpen, tableSessionId, restaurantId]);
+
   // Fetch table session data
   useEffect(() => {
     const fetchTableSession = async () => {
@@ -87,31 +121,27 @@ export function BillGenerationDialog({
           url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}`
         });
         
-        // Fetch orders and existing bills for each customer
-        const customersWithOrders = await Promise.all(
-          (sessionData.customers || []).map(async (customer: Customer) => {
-            try {
-              const orders = await apiRequest({
-                method: 'GET',
-                url: `/api/restaurants/${restaurantId}/orders?customerId=${customer.id}`
-              });
-              const customerTotal = orders.reduce((sum: number, order: Order) => sum + parseFloat(order.total), 0);
-              
-              return {
-                ...customer,
-                orders,
-                totalAmount: customerTotal
-              };
-            } catch (error) {
-              console.error(`Error fetching orders for customer ${customer.id}:`, error);
-              return {
-                ...customer,
-                orders: [],
-                totalAmount: 0
-              };
-            }
-          })
-        );
+        // Fetch all orders for the session in one call
+        const allOrders = await apiRequest({
+          method: 'GET',
+          url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}/orders`
+        });
+        // Group orders by customerId
+        const ordersByCustomer: Record<number, Order[]> = {};
+        for (const order of allOrders) {
+          if (!ordersByCustomer[order.customerId]) ordersByCustomer[order.customerId] = [];
+          ordersByCustomer[order.customerId].push(order);
+        }
+        // Attach orders and totals to each customer
+        const customersWithOrders = (sessionData.customers || []).map((customer: Customer) => {
+          const orders = ordersByCustomer[customer.id] || [];
+          const customerTotal = orders.reduce((sum: number, order: Order) => sum + parseFloat(order.total), 0);
+          return {
+            ...customer,
+            orders,
+            totalAmount: customerTotal
+          };
+        });
 
         // Check for existing bills
         const sessionBills = await apiRequest({
