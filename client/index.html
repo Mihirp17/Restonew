@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+    <title>Restomate - Restaurant Management Platform</title>
+    <meta name="description" content="A multi-tenant restaurant management platform for menu, tables, and order management with QR code ordering for customers." />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Roboto+Mono&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <!-- Open Graph tags -->
+    <meta property="og:title" content="Restomate - Restaurant Management Platform" />
+    <meta property="og:description" content="A multi-tenant restaurant management platform for menu, tables, and order management with QR code ordering for customers." />
+    <meta property="og:type" content="website" />
+    <!--
+      Content Security Policy for development mode that allows local WebSocket
+      connections. In production a stricter CSP header is returned by the
+      Express server – this meta tag is only used by the standalone Vite dev
+      server when it serves index.html directly.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="
+        default-src 'self';
+        script-src 'self' 'unsafe-inline' 'unsafe-eval';
+        connect-src 'self' ws: wss: http://localhost:3000 ws://localhost:3000;
+        style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+        font-src 'self' https://fonts.gstatic.com;
+        img-src 'self' data:;
+        frame-src 'self';
+      "
+    >
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
