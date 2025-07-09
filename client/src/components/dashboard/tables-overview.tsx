@@ -19,7 +19,7 @@ const TableCard = memo(({
   table: Omit<Table, 'createdAt' | 'updatedAt' | 'groupId'> & { 
     createdAt: string | Date; 
     updatedAt: string | Date; 
-    groupId: number | null | undefined;
+    groupId?: number | null;
   };
   onToggleOccupied: (tableId: number, isOccupied: boolean) => void; 
   t: any;
