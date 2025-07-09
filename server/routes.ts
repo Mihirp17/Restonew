@@ -842,6 +842,197 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   console.log("Analytics routes set up successfully");
 
+  // AI Routes
+  console.log("Setting up AI routes...");
+  
+  // AI Insights endpoints
+  app.get('/api/restaurants/:restaurantId/ai-insights', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      const insights = await storage.getAiInsightsByRestaurantId(restaurantId);
+      return res.json(insights);
+    } catch (error) {
+      console.error('Error fetching AI insights:', error);
+      return res.status(500).json({ message: 'Failed to fetch AI insights' });
+    }
+  });
+
+  app.post('/api/restaurants/:restaurantId/ai-insights/generate', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      const { generateRestaurantInsights } = await import('./ai.js');
+      const insights = await generateRestaurantInsights(restaurantId);
+      return res.json(insights);
+    } catch (error) {
+      console.error('Error generating AI insights:', error);
+      return res.status(500).json({ message: 'Failed to generate AI insights' });
+    }
+  });
+
+  app.put('/api/restaurants/:restaurantId/ai-insights/:insightId/read', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const insightId = parseInt(req.params.insightId);
+      
+      if (isNaN(restaurantId) || isNaN(insightId)) {
+        return res.status(400).json({ message: 'Invalid restaurant or insight ID' });
+      }
+
+      const success = await storage.markAiInsightAsRead(insightId);
+      if (!success) {
+        return res.status(404).json({ message: 'Insight not found' });
+      }
+
+      return res.json({ success: true });
+    } catch (error) {
+      console.error('Error marking insight as read:', error);
+      return res.status(500).json({ message: 'Failed to mark insight as read' });
+    }
+  });
+
+  app.put('/api/restaurants/:restaurantId/ai-insights/:insightId/status', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const insightId = parseInt(req.params.insightId);
+      const { status } = req.body;
+      
+      if (isNaN(restaurantId) || isNaN(insightId)) {
+        return res.status(400).json({ message: 'Invalid restaurant or insight ID' });
+      }
+
+      if (!['pending', 'in_progress', 'completed', 'dismissed'].includes(status)) {
+        return res.status(400).json({ message: 'Invalid status' });
+      }
+
+      const success = await storage.updateAiInsightStatus(insightId, status);
+      if (!success) {
+        return res.status(404).json({ message: 'Insight not found' });
+      }
+
+      return res.json({ success: true });
+    } catch (error) {
+      console.error('Error updating insight status:', error);
+      return res.status(500).json({ message: 'Failed to update insight status' });
+    }
+  });
+
+  // AI Chat endpoint
+  app.post('/api/restaurants/:restaurantId/ai/chat', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      const { message, timeframe, dataTypes } = req.body;
+      
+      if (!message || typeof message !== 'string') {
+        return res.status(400).json({ message: 'Message is required' });
+      }
+
+      const { handleRestaurantChat } = await import('./ai.js');
+      const response = await handleRestaurantChat({
+        message,
+        context: {
+          restaurantId,
+          timeframe: timeframe || '30_days',
+          dataTypes: dataTypes || ['orders', 'revenue', 'feedback', 'menu_items']
+        }
+      });
+
+      return res.json({ response });
+    } catch (error) {
+      console.error('Error processing AI chat:', error);
+      return res.status(500).json({ message: 'Failed to process chat message' });
+    }
+  });
+
+  // AI Analytics Insights endpoint
+  app.post('/api/restaurants/:restaurantId/analytics/ai-insights', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      const validation = dateRangeSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ errors: validation.error.errors });
+      }
+
+      const { startDate, endDate } = validation.data;
+
+      // Get restaurant data for the specified date range
+      const restaurant = await storage.getRestaurant(restaurantId);
+      if (!restaurant) {
+        return res.status(404).json({ message: 'Restaurant not found' });
+      }
+
+      // Get data for the date range
+      const [orders, menuItems, feedback] = await Promise.all([
+        storage.getOrdersByRestaurantId(restaurantId),
+        storage.getMenuItems(restaurantId),
+        storage.getFeedbackByRestaurantId(restaurantId)
+      ]);
+
+      // Filter data by date range
+      const filteredOrders = orders.filter(order => {
+        const orderDate = new Date(order.createdAt);
+        return orderDate >= startDate && orderDate <= endDate;
+      });
+
+      const filteredFeedback = feedback.filter(f => {
+        const feedbackDate = new Date(f.createdAt);
+        return feedbackDate >= startDate && feedbackDate <= endDate;
+      });
+
+      // Calculate metrics
+      const totalRevenue = filteredOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
+      const averageOrderValue = filteredOrders.length > 0 ? totalRevenue / filteredOrders.length : 0;
+      const averageRating = filteredFeedback.length > 0 ? filteredFeedback.reduce((sum, f) => sum + f.rating, 0) / filteredFeedback.length : 0;
+
+      // Generate insights using AI
+      const { generateRestaurantInsights } = await import('./ai.js');
+      const insights = await generateRestaurantInsights(restaurantId);
+
+      // Format response for analytics tab
+      const performanceSummary = `Your restaurant generated $${totalRevenue.toFixed(2)} in revenue from ${filteredOrders.length} orders during this period. The average order value was $${averageOrderValue.toFixed(2)}.`;
+      
+      const recommendations = insights.slice(0, 3).flatMap(insight => insight.recommendations);
+      
+      const popularItemsAnalysis = `Your top performing items are generating consistent revenue. Consider promoting high-margin items to increase profitability.`;
+      
+      const customerSatisfaction = `Customer satisfaction is at ${averageRating.toFixed(1)}/5 based on ${filteredFeedback.length} reviews. Focus on addressing any negative feedback to improve ratings.`;
+      
+      const growthOpportunities = [
+        'Implement a loyalty program to increase customer retention',
+        'Optimize menu pricing based on cost analysis',
+        'Consider expanding delivery options during peak hours'
+      ];
+
+      return res.json({
+        performanceSummary,
+        recommendations,
+        popularItemsAnalysis,
+        customerSatisfaction,
+        growthOpportunities
+      });
+    } catch (error) {
+      console.error('Error generating analytics insights:', error);
+      return res.status(500).json({ message: 'Failed to generate analytics insights' });
+    }
+  });
+
+  console.log("AI routes set up successfully");
+
   // Feedback Routes
   console.log("Setting up feedback routes...");
   app.post('/api/restaurants/:restaurantId/feedback', async (req, res) => {

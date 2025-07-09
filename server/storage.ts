@@ -95,6 +95,8 @@ export interface IStorage {
   getAiInsightsByRestaurantId(restaurantId: number): Promise<any[]>;
   createAiInsight(insight: any): Promise<any>;
   updateAiInsight(insightId: number, updates: any): Promise<any>;
+  markAiInsightAsRead(insightId: number): Promise<boolean>;
+  updateAiInsightStatus(insightId: number, status: string): Promise<boolean>;
 
   // Table Session Methods
   getTableSession(id: number): Promise<TableSession | undefined>;
@@ -775,6 +777,34 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.error('Error updating AI insight:', error);
       throw error;
+    }
+  }
+
+  async markAiInsightAsRead(insightId: number): Promise<boolean> {
+    try {
+      const result = await db
+        .update(aiInsights)
+        .set({ isRead: true, updatedAt: new Date() })
+        .where(eq(aiInsights.id, insightId))
+        .returning();
+      return result.length > 0;
+    } catch (error) {
+      console.error('Error marking AI insight as read:', error);
+      return false;
+    }
+  }
+
+  async updateAiInsightStatus(insightId: number, status: string): Promise<boolean> {
+    try {
+      const result = await db
+        .update(aiInsights)
+        .set({ implementationStatus: status, updatedAt: new Date() })
+        .where(eq(aiInsights.id, insightId))
+        .returning();
+      return result.length > 0;
+    } catch (error) {
+      console.error('Error updating AI insight status:', error);
+      return false;
     }
   }
 

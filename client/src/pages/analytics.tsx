@@ -11,7 +11,7 @@ import { getRelativeDateRange } from "@/lib/utils";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, Legend } from "recharts";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
-import { AIInsights } from "@/components/dashboard/ai-insights";
+import { AIInsights } from "@/components/analytics/ai-insights";
 import { AIChatbox } from "@/components/dashboard/ai-chatbox";
 
 // Define the type of analytics data
@@ -350,7 +350,11 @@ export default function Analytics() {
 
         <TabsContent value="ai-insights">
           {restaurantId ? (
-            <AIInsights restaurantId={restaurantId} />
+            <AIInsights 
+              restaurantId={restaurantId} 
+              startDate={getRelativeDateRange(dateRange).startDate}
+              endDate={getRelativeDateRange(dateRange).endDate}
+            />
           ) : (
             <div className="flex justify-center items-center py-12">
               <p className="text-gray-500">Please log in to view AI insights.</p>
