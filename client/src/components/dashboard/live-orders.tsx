@@ -18,7 +18,7 @@ const OrderCard = memo(({
   t 
 }: { 
   order: any; 
-  onUpdateStatus: (orderId: number, status: string) => void; 
+  onUpdateStatus: (orderId: number, status: string) => Promise<void>; 
   t: any;
 }) => {
   const statusColors = useMemo(() => getStatusColor(order.status), [order.status]);
@@ -121,7 +121,7 @@ export const LiveOrders = memo(({ restaurantId }: LiveOrdersProps) => {
   const { activeOrders, updateOrderStatus, isLoading } = useOrders(restaurantId || 0, { 
     lightweight: true, 
     limit: 10 
-  }) as { activeOrders: any[]; updateOrderStatus: (args: { orderId: number; status: 'pending' | 'confirmed' | 'preparing' | 'served' | 'completed' | 'cancelled' }) => void; isLoading: boolean };
+  }) as { activeOrders: any[]; updateOrderStatus: (args: { orderId: number; status: string }) => void; isLoading: boolean };
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { t } = useLang();
@@ -132,7 +132,7 @@ export const LiveOrders = memo(({ restaurantId }: LiveOrdersProps) => {
   // Handle order status update
   const handleUpdateStatus = useCallback(async (
     orderId: number,
-    status: 'pending' | 'confirmed' | 'preparing' | 'served' | 'completed' | 'cancelled'
+    status: string
   ) => {
     try {
       await updateOrderStatus({ orderId, status });
