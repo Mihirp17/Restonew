@@ -55,23 +55,94 @@ export interface WaiterRequest {
   tableSessionId?: number;
 }
 
-// Client tracking with heartbeat
+// Enhanced client tracking with heartbeat and connection metadata
 type SocketClient = {
   socket: WebSocket;
   restaurantId?: number;
   tableId?: number;
   lastPing: number;
   isAlive: boolean;
+  connectionTime: number;
+  messageCount: number;
+  lastMessageTime: number;
 };
 
 let clients: SocketClient[] = [];
+let messageQueue: Array<{ restaurantId: number; message: SocketMessage }> = [];
+let isProcessingQueue = false;
 
-// Heartbeat interval in milliseconds
-const HEARTBEAT_INTERVAL = 30000;
-const HEARTBEAT_TIMEOUT = 35000;
+// Performance configuration
+const HEARTBEAT_INTERVAL = 30000; // 30 seconds
+const HEARTBEAT_TIMEOUT = 35000; // 35 seconds
+const MAX_CLIENTS_PER_RESTAURANT = 10;
+const MESSAGE_QUEUE_BATCH_SIZE = 10;
+const MESSAGE_QUEUE_PROCESS_INTERVAL = 100; // 100ms
+
+// Process message queue in batches for better performance
+async function processMessageQueue() {
+  if (isProcessingQueue || messageQueue.length === 0) return;
+  
+  isProcessingQueue = true;
+  
+  try {
+    const batch = messageQueue.splice(0, MESSAGE_QUEUE_BATCH_SIZE);
+    const restaurantGroups = new Map<number, SocketMessage[]>();
+    
+    // Group messages by restaurant
+    batch.forEach(({ restaurantId, message }) => {
+      if (!restaurantGroups.has(restaurantId)) {
+        restaurantGroups.set(restaurantId, []);
+      }
+      restaurantGroups.get(restaurantId)!.push(message);
+    });
+    
+    // Send batched messages
+    for (const [restaurantId, messages] of restaurantGroups) {
+      const restaurantClients = clients.filter(c => c.restaurantId === restaurantId);
+      
+      if (restaurantClients.length === 0) continue;
+      
+      // Send each message to all clients for this restaurant
+      for (const message of messages) {
+        const messageStr = JSON.stringify(message);
+        for (const client of restaurantClients) {
+          if (client.socket.readyState === WebSocket.OPEN) {
+            try {
+              client.socket.send(messageStr);
+              client.messageCount++;
+              client.lastMessageTime = Date.now();
+            } catch (error) {
+              console.error('Error sending message to client:', error);
+              // Mark client for cleanup
+              client.isAlive = false;
+            }
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error processing message queue:', error);
+  } finally {
+    isProcessingQueue = false;
+    
+    // Schedule next processing if there are more messages
+    if (messageQueue.length > 0) {
+      setTimeout(processMessageQueue, MESSAGE_QUEUE_PROCESS_INTERVAL);
+    }
+  }
+}
+
+// Add message to queue for batched processing
+function queueMessage(restaurantId: number, message: SocketMessage) {
+  messageQueue.push({ restaurantId, message });
+  
+  if (!isProcessingQueue) {
+    setTimeout(processMessageQueue, MESSAGE_QUEUE_PROCESS_INTERVAL);
+  }
+}
 
 export const setupWebSocketServer = (server: HttpServer) => {
-  // Create a WebSocket server on a distinct path
+  // Create a WebSocket server with optimized configuration
   const wss = new WebSocketServer({ 
     server, 
     path: '/ws',
@@ -89,16 +160,19 @@ export const setupWebSocketServer = (server: HttpServer) => {
       serverMaxWindowBits: 10,
       concurrencyLimit: 10,
       threshold: 1024
-    }
+    },
+    maxPayload: 1024 * 1024, // 1MB max payload
   });
 
-  // Heartbeat interval
+  // Optimized heartbeat interval
   const interval = setInterval(() => {
+    const now = Date.now();
     wss.clients.forEach((ws: WebSocket) => {
       const client = clients.find(c => c.socket === ws);
       if (client) {
         if (!client.isAlive) {
-          console.log('Client connection timed out');
+          console.log('Client connection timed out, removing');
+          clients = clients.filter(c => c.socket !== ws);
           return ws.terminate();
         }
         
@@ -106,16 +180,32 @@ export const setupWebSocketServer = (server: HttpServer) => {
         ws.ping();
       }
     });
+    
+    // Clean up old clients
+    clients = clients.filter(client => {
+      const isOld = now - client.connectionTime > 24 * 60 * 60 * 1000; // 24 hours
+      if (isOld) {
+        console.log('Removing old client connection');
+        client.socket.terminate();
+        return false;
+      }
+      return true;
+    });
   }, HEARTBEAT_INTERVAL);
 
   wss.on('connection', (socket: WebSocket) => {
-    // Add new client to the list
+    // Add new client to the list with enhanced tracking
     const client: SocketClient = { 
       socket, 
       lastPing: Date.now(),
-      isAlive: true 
+      isAlive: true,
+      connectionTime: Date.now(),
+      messageCount: 0,
+      lastMessageTime: Date.now()
     };
     clients.push(client);
+
+    console.log(`[WebSocket] New connection. Total clients: ${clients.length}`);
 
     // Handle pong messages
     socket.on('pong', () => {
@@ -126,9 +216,20 @@ export const setupWebSocketServer = (server: HttpServer) => {
       }
     });
 
-    // Handle messages from client
+    // Handle messages from client with rate limiting
     socket.on('message', async (data: string) => {
       try {
+        const client = clients.find(c => c.socket === socket);
+        if (!client) return;
+
+        // Rate limiting: max 10 messages per second per client
+        const now = Date.now();
+        if (now - client.lastMessageTime < 100) {
+          console.warn('Rate limit exceeded for client');
+          return;
+        }
+        client.lastMessageTime = now;
+
         // Validate message format
         const message = socketMessageSchema.parse(JSON.parse(data));
         
@@ -136,8 +237,20 @@ export const setupWebSocketServer = (server: HttpServer) => {
           case 'register-restaurant': {
             // Register this connection as belonging to a restaurant
             const restaurantId = z.number().parse(message.payload.restaurantId);
+            
+            // Check if we're at the limit for this restaurant
+            const restaurantClientCount = clients.filter(c => c.restaurantId === restaurantId).length;
+            if (restaurantClientCount >= MAX_CLIENTS_PER_RESTAURANT) {
+              console.warn(`Max clients reached for restaurant ${restaurantId}`);
+              socket.send(JSON.stringify({
+                type: 'error',
+                payload: { message: 'Too many connections for this restaurant' }
+              }));
+              return;
+            }
+            
             client.restaurantId = restaurantId;
-            console.log(`[WebSocket] Client registered for restaurant ${restaurantId}. Total restaurant clients: ${clients.filter(c => c.restaurantId === restaurantId).length}`);
+            console.log(`[WebSocket] Client registered for restaurant ${restaurantId}. Total restaurant clients: ${restaurantClientCount + 1}`);
             break;
           }
             
@@ -160,8 +273,8 @@ export const setupWebSocketServer = (server: HttpServer) => {
             // Update in database
             await storage.updateOrder(updateData.orderId, { status: updateData.status });
             
-            // Broadcast thin patch to all clients
-            broadcastToRestaurant(updateData.restaurantId, {
+            // Queue message for batched broadcasting
+            queueMessage(updateData.restaurantId, {
               type: 'order-patch',
               payload: {
                 id: updateData.orderId,
@@ -176,8 +289,8 @@ export const setupWebSocketServer = (server: HttpServer) => {
             // Handle new order creation
             const orderData = newOrderSchema.parse(message.payload);
             
-            // Broadcast to restaurant
-            broadcastToRestaurant(orderData.restaurantId, {
+            // Queue message for batched broadcasting
+            queueMessage(orderData.restaurantId, {
               type: 'new-order-received',
               payload: orderData.order
             });
@@ -189,8 +302,6 @@ export const setupWebSocketServer = (server: HttpServer) => {
             const waiterRequest = waiterRequestSchema.parse(message.payload);
             
             console.log('[WebSocket] Waiter request received:', waiterRequest);
-            console.log('[WebSocket] Connected clients:', clients.length);
-            console.log('[WebSocket] Restaurant clients:', clients.filter(c => c.restaurantId === waiterRequest.restaurantId).length);
             
             // If this is a bill payment request, mark the session as requesting bill
             if (waiterRequest.requestType === 'bill-payment' && waiterRequest.tableSessionId) {
@@ -199,100 +310,79 @@ export const setupWebSocketServer = (server: HttpServer) => {
                   billRequested: true,
                   billRequestedAt: new Date()
                 });
-                console.log(`[WebSocket] Session ${waiterRequest.tableSessionId} marked as requesting bill`);
               } catch (error) {
-                console.error('[WebSocket] Error updating session bill request status:', error);
+                console.error('Error updating table session:', error);
               }
             }
             
-            // Broadcast to restaurant staff
-            broadcastToRestaurant(waiterRequest.restaurantId, {
+            // Queue message for batched broadcasting
+            queueMessage(waiterRequest.restaurantId, {
               type: 'waiter-requested',
               payload: waiterRequest
             });
-            
-            console.log('[WebSocket] Waiter request broadcasted to restaurant', waiterRequest.restaurantId);
             break;
           }
             
           default:
-            console.warn('Unknown message type:', message.type);
+            console.warn(`Unknown message type: ${message.type}`);
         }
-      } catch (error: unknown) {
+      } catch (error) {
         console.error('Error handling WebSocket message:', error);
-        if (error instanceof z.ZodError) {
-          socket.send(JSON.stringify({
-            type: 'error',
-            payload: {
-              message: 'Invalid message format',
-              errors: error.errors
-            }
-          }));
-        } else {
-          socket.send(JSON.stringify({
-            type: 'error',
-            payload: {
-              message: 'Internal server error'
-            }
-          }));
-        }
+        socket.send(JSON.stringify({
+          type: 'error',
+          payload: { message: 'Invalid message format' }
+        }));
       }
     });
 
-    // Handle client disconnection
-    socket.on('close', () => {
-      // Remove client from the list
+    socket.on('close', (code: number, reason: any) => {
+      console.log(`[WebSocket] Client disconnected. Code: ${code}, Reason: ${reason || 'No reason provided'}`);
       clients = clients.filter(c => c.socket !== socket);
     });
 
-    // Handle errors
     socket.on('error', (error: Error) => {
-      console.error('WebSocket error:', error);
-      socket.close();
+      console.error('[WebSocket] Client error:', error);
+      clients = clients.filter(c => c.socket !== socket);
     });
   });
 
-  // Cleanup on server close
+  wss.on('error', (error) => {
+    console.error('[WebSocket] Server error:', error);
+  });
+
+  // Cleanup on server shutdown
   wss.on('close', () => {
     clearInterval(interval);
+    console.log('[WebSocket] Server closed');
   });
-
-  return wss;
 };
 
-// Helper function to send a message to all clients connected to a specific restaurant
+// Optimized broadcast function using message queue
 const broadcastToRestaurant = (restaurantId: number, message: SocketMessage) => {
+  queueMessage(restaurantId, message);
+};
+
+export const sendToTable = (restaurantId: number, tableId: number, message: SocketMessage) => {
+  const tableClients = clients.filter(c => 
+    c.restaurantId === restaurantId && c.tableId === tableId
+  );
+  
+  if (tableClients.length === 0) return;
+  
   const messageStr = JSON.stringify(message);
-  clients.forEach(client => {
-    if (
-      client.restaurantId === restaurantId && 
-      client.socket.readyState === WebSocket.OPEN
-    ) {
+  tableClients.forEach(client => {
+    if (client.socket.readyState === WebSocket.OPEN) {
       try {
         client.socket.send(messageStr);
-      } catch (error: unknown) {
-        console.error('Error sending message to client:', error);
-        client.socket.close();
+        client.messageCount++;
+        client.lastMessageTime = Date.now();
+      } catch (error) {
+        console.error('Error sending message to table client:', error);
+        client.isAlive = false;
       }
     }
   });
 };
 
-// Helper function to send a message to a specific table
-export const sendToTable = (restaurantId: number, tableId: number, message: SocketMessage) => {
-  const messageStr = JSON.stringify(message);
-  clients.forEach(client => {
-    if (
-      client.restaurantId === restaurantId && 
-      client.tableId === tableId && 
-      client.socket.readyState === WebSocket.OPEN
-    ) {
-      try {
-        client.socket.send(messageStr);
-      } catch (error: unknown) {
-        console.error('Error sending message to table:', error);
-        client.socket.close();
-      }
-    }
-  });
-};
+// Export the broadcast function
+export { broadcastToRestaurant };

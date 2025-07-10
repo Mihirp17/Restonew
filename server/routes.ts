@@ -1591,7 +1591,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
 
       const reply = await handleRestaurantChat(chatRequest);
-      return res.json({ reply });
+      return res.json(reply);
     } catch (error) {
       console.error('AI Chat error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';

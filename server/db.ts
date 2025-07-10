@@ -1,15 +1,59 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import * as schema from "@shared/schema";
+import * as schema from '@shared/schema';
 
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL must be set. Did you forget to provision a database?");
+// Connection pool configuration for better performance
+const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL || '';
+
+if (!connectionString) {
+  throw new Error('DATABASE_URL or POSTGRES_URL environment variable is required');
 }
 
-// In production, use strict SSL (rejectUnauthorized: true) so that self-signed certs are not accepted.
-// In development, we disable strict SSL checks (rejectUnauthorized: false) for convenience.
-const sslConfig = (process.env.NODE_ENV === "production") ? { ssl: { rejectUnauthorized: true } } : { ssl: { rejectUnauthorized: false } };
+// Optimized postgres client with connection pooling
+const client = postgres(connectionString, {
+  max: 20, // Maximum number of connections in the pool
+  idle_timeout: 20, // Close idle connections after 20 seconds
+  connect_timeout: 10, // Connection timeout of 10 seconds
+  max_lifetime: 60 * 30, // Close connections after 30 minutes
+  prepare: true, // Enable prepared statements for better performance
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  onnotice: () => {}, // Suppress notice messages
+  onparameter: () => {}, // Suppress parameter messages
+});
 
-const connectionString = process.env.DATABASE_URL;
-const client = postgres(connectionString, sslConfig);
+// Create drizzle instance with schema
 export const db = drizzle(client, { schema });
+
+// Health check function
+export async function checkDatabaseConnection(): Promise<boolean> {
+  try {
+    await client`SELECT 1`;
+    return true;
+  } catch (error) {
+    console.error('Database connection check failed:', error);
+    return false;
+  }
+}
+
+// Graceful shutdown
+export async function closeDatabaseConnection(): Promise<void> {
+  try {
+    await client.end();
+    console.log('Database connection closed gracefully');
+  } catch (error) {
+    console.error('Error closing database connection:', error);
+  }
+}
+
+// Handle process termination
+process.on('SIGINT', async () => {
+  console.log('Received SIGINT, closing database connection...');
+  await closeDatabaseConnection();
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  console.log('Received SIGTERM, closing database connection...');
+  await closeDatabaseConnection();
+  process.exit(0);
+});

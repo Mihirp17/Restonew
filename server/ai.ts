@@ -2,14 +2,15 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { storage } from './storage.js';
 import { z } from 'zod';
 
-// Initialize Gemini AI
+// Initialize Gemini AI with better error handling
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
+// Enhanced insight schema with better validation
 const insightSchema = z.object({
   type: z.enum(["revenue", "menu", "customer_satisfaction", "operations", "marketing"]),
-  title: z.string(),
-  description: z.string(),
-  recommendations: z.array(z.string()),
+  title: z.string().min(1).max(200),
+  description: z.string().min(10).max(1000),
+  recommendations: z.array(z.string().min(1).max(200)).min(1).max(5),
   confidence: z.number().min(0).max(1),
   priority: z.enum(["high", "medium", "low"]),
   dataSource: z.object({
@@ -25,7 +26,6 @@ const analyticsInsightSchema = z.object({
   customerSatisfaction: z.string(),
   growthOpportunities: z.array(z.string()),
 });
-
 
 // AI Insight types
 export interface AIInsight {
@@ -59,13 +59,41 @@ const chatMessageSchema = z.object({
 
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
 
-// Generate AI insights for a restaurant
+// Cache for AI responses to improve performance
+const aiCache = new Map<string, { data: any; timestamp: number }>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+// Helper function to get cached data
+function getCachedData(key: string): any | null {
+  const cached = aiCache.get(key);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.data;
+  }
+  return null;
+}
+
+// Helper function to set cached data
+function setCachedData(key: string, data: any): void {
+  aiCache.set(key, { data, timestamp: Date.now() });
+}
+
+// Generate AI insights for a restaurant with improved error handling and caching
 export async function generateRestaurantInsights(restaurantId: number): Promise<AIInsight[]> {
   try {
+    // Check cache first
+    const cacheKey = `insights_${restaurantId}`;
+    const cachedInsights = getCachedData(cacheKey);
+    if (cachedInsights) {
+      console.log(`[AI] Returning cached insights for restaurant ${restaurantId}`);
+      return cachedInsights;
+    }
+
     // Check if we have a valid API key
     if (!process.env.GEMINI_API_KEY) {
       console.warn('GEMINI_API_KEY not configured, returning mock insights');
-      return generateMockInsights(restaurantId);
+      const mockInsights = generateMockInsights(restaurantId);
+      setCachedData(cacheKey, mockInsights);
+      return mockInsights;
     }
 
     // Get restaurant data for context
@@ -74,25 +102,44 @@ export async function generateRestaurantInsights(restaurantId: number): Promise<
       throw new Error('Restaurant not found');
     }
 
-    // Gather recent data for analysis
-    const [orders, menuItems, feedback] = await Promise.all([
+    // Gather recent data for analysis with better error handling
+    const [orders, menuItems, feedback] = await Promise.allSettled([
       storage.getOrdersByRestaurantId(restaurantId),
       storage.getMenuItems(restaurantId),
       storage.getFeedbackByRestaurantId(restaurantId)
     ]);
 
+    // Handle failed promises gracefully
+    const recentOrders = orders.status === 'fulfilled' ? orders.value : [];
+    const menuItemsData = menuItems.status === 'fulfilled' ? menuItems.value : [];
+    const feedbackData = feedback.status === 'fulfilled' ? feedback.value : [];
+
     // Get recent orders (last 30 days)
-    const recentOrders = orders.filter(order => {
-      const orderDate = new Date(order.createdAt);
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      return orderDate >= thirtyDaysAgo;
+    const filteredOrders = recentOrders.filter(order => {
+      try {
+        const orderDate = new Date(order.createdAt);
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        return orderDate >= thirtyDaysAgo;
+      } catch (error) {
+        console.warn('Invalid order date:', order.createdAt);
+        return false;
+      }
     });
 
-    // Calculate key metrics
-    const totalRevenue = recentOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
-    const averageOrderValue = recentOrders.length > 0 ? totalRevenue / recentOrders.length : 0;
-    const averageRating = feedback.length > 0 ? feedback.reduce((sum, f) => sum + f.rating, 0) / feedback.length : 0;
+    // Calculate key metrics with error handling
+    const totalRevenue = filteredOrders.reduce((sum, order) => {
+      try {
+        return sum + parseFloat(order.total || '0');
+      } catch (error) {
+        console.warn('Invalid order total:', order.total);
+        return sum;
+      }
+    }, 0);
+
+    const averageOrderValue = filteredOrders.length > 0 ? totalRevenue / filteredOrders.length : 0;
+    const averageRating = feedbackData.length > 0 ? 
+      feedbackData.reduce((sum, f) => sum + (f.rating || 0), 0) / feedbackData.length : 0;
 
     // Prepare context for Gemini
     const context = {
@@ -101,25 +148,33 @@ export async function generateRestaurantInsights(restaurantId: number): Promise<
         description: restaurant.description
       },
       metrics: {
-        totalOrders: recentOrders.length,
+        totalOrders: filteredOrders.length,
         totalRevenue,
         averageOrderValue,
         averageRating,
-        menuItemCount: menuItems.length,
-        feedbackCount: feedback.length
+        menuItemCount: menuItemsData.length,
+        feedbackCount: feedbackData.length
       },
-      recentFeedback: feedback.slice(-5).map(f => ({
-        rating: f.rating,
-        comment: f.comment
+      recentFeedback: feedbackData.slice(-5).map(f => ({
+        rating: f.rating || 0,
+        comment: f.comment || ''
       })),
-      topMenuItems: menuItems.slice(0, 10).map(item => ({
+      topMenuItems: menuItemsData.slice(0, 10).map(item => ({
         name: item.name,
         price: item.price,
         category: item.category
       }))
     };
 
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = genAI.getGenerativeModel({ 
+      model: 'gemini-1.5-flash',
+      generationConfig: {
+        temperature: 0.7,
+        topP: 0.8,
+        topK: 40,
+        maxOutputTokens: 2048,
+      }
+    });
 
     const prompt = `
 As a restaurant business analyst, analyze the following restaurant data and provide 3-5 actionable insights in JSON format.
@@ -147,6 +202,7 @@ Please provide insights in this exact JSON format:
 ]
 
 Focus on practical, implementable recommendations that can improve the restaurant's performance.
+Ensure all JSON is properly formatted and valid.
 `;
 
     const result = await model.generateContent(prompt);
@@ -154,7 +210,7 @@ Focus on practical, implementable recommendations that can improve the restauran
     const text = response.text();
 
     try {
-      // Extract JSON from response
+      // Extract JSON from response with better error handling
       const jsonMatch = text.match(/\[[\s\S]*\]/);
       if (!jsonMatch) {
         throw new Error('No valid JSON found in response');
@@ -180,27 +236,38 @@ Focus on practical, implementable recommendations that can improve the restauran
         description: insight.description,
         recommendations: insight.recommendations,
         dataSource: insight.dataSource,
-        confidence: insight.confidence * 100, // Convert to percentage
+        confidence: Math.round(insight.confidence * 100), // Convert to percentage
         priority: insight.priority,
         isRead: false,
         implementationStatus: 'pending'
       }));
 
-      // Save insights to database
+      // Save insights to database with error handling
       for (const insight of aiInsights) {
-        await storage.createAiInsight(insight);
+        try {
+          await storage.createAiInsight(insight);
+        } catch (error) {
+          console.error('Error saving insight to database:', error);
+          // Continue with other insights even if one fails
+        }
       }
+
+      // Cache the results
+      setCachedData(cacheKey, aiInsights);
 
       return aiInsights;
     } catch (parseError) {
       console.error('Error parsing Gemini response:', parseError);
       console.error('Raw response:', text);
-      return generateMockInsights(restaurantId);
+      const mockInsights = generateMockInsights(restaurantId);
+      setCachedData(cacheKey, mockInsights);
+      return mockInsights;
     }
 
   } catch (error) {
-    console.error('Error generating AI insights:', error);
-    return generateMockInsights(restaurantId);
+    console.error('Error generating restaurant insights:', error);
+    const mockInsights = generateMockInsights(restaurantId);
+    return mockInsights;
   }
 }
 
@@ -294,12 +361,22 @@ export async function handleRestaurantChat(message: ChatMessage): Promise<string
       throw new Error('Invalid chat message format');
     }
 
-    if (!process.env.GEMINI_API_KEY) {
-      return generateMockChatResponse(validation.data.message);
-    }
-
     const { message: userMessage, context } = validation.data;
     const { restaurantId } = context;
+
+    // Check cache for similar questions
+    const cacheKey = `chat_${restaurantId}_${btoa(userMessage.toLowerCase()).slice(0, 20)}`;
+    const cachedResponse = getCachedData(cacheKey);
+    if (cachedResponse) {
+      console.log(`[AI Chat] Returning cached response for restaurant ${restaurantId}`);
+      return cachedResponse;
+    }
+
+    if (!process.env.GEMINI_API_KEY) {
+      const mockResponse = generateMockChatResponse(validation.data.message);
+      setCachedData(cacheKey, mockResponse);
+      return mockResponse;
+    }
 
     // Get restaurant context
     const restaurant = await storage.getRestaurant(restaurantId);
@@ -307,15 +384,15 @@ export async function handleRestaurantChat(message: ChatMessage): Promise<string
       throw new Error('Restaurant not found');
     }
 
-    // Gather comprehensive data based on the question
+    // Gather comprehensive data based on the question with better error handling
     const [
-      orders,
-      menuItems,
-      feedback,
-      popularItems,
-      activeOrders,
-      tables
-    ] = await Promise.all([
+      ordersResult,
+      menuItemsResult,
+      feedbackResult,
+      popularItemsResult,
+      activeOrdersResult,
+      tablesResult
+    ] = await Promise.allSettled([
       storage.getOrdersByRestaurantId(restaurantId),
       storage.getMenuItems(restaurantId),
       storage.getFeedbackByRestaurantId(restaurantId),
@@ -324,32 +401,62 @@ export async function handleRestaurantChat(message: ChatMessage): Promise<string
       storage.getTablesByRestaurantId(restaurantId)
     ]);
 
-    // Calculate recent metrics with more granular timeframes
+    // Handle failed promises gracefully
+    const orders = ordersResult.status === 'fulfilled' ? ordersResult.value : [];
+    const menuItems = menuItemsResult.status === 'fulfilled' ? menuItemsResult.value : [];
+    const feedback = feedbackResult.status === 'fulfilled' ? feedbackResult.value : [];
+    const popularItems = popularItemsResult.status === 'fulfilled' ? popularItemsResult.value : [];
+    const activeOrders = activeOrdersResult.status === 'fulfilled' ? activeOrdersResult.value : [];
+    const tables = tablesResult.status === 'fulfilled' ? tablesResult.value : [];
+
+    // Calculate recent metrics with more granular timeframes and error handling
     const now = new Date();
     const recentOrders = {
       last24h: orders.filter(order => {
-        const orderDate = new Date(order.createdAt);
-        const yesterday = new Date(now);
-        yesterday.setDate(yesterday.getDate() - 1);
-        return orderDate >= yesterday;
+        try {
+          const orderDate = new Date(order.createdAt);
+          const yesterday = new Date(now);
+          yesterday.setDate(yesterday.getDate() - 1);
+          return orderDate >= yesterday;
+        } catch (error) {
+          console.warn('Invalid order date:', order.createdAt);
+          return false;
+        }
       }),
       last7d: orders.filter(order => {
-        const orderDate = new Date(order.createdAt);
-        const lastWeek = new Date(now);
-        lastWeek.setDate(lastWeek.getDate() - 7);
-        return orderDate >= lastWeek;
+        try {
+          const orderDate = new Date(order.createdAt);
+          const lastWeek = new Date(now);
+          lastWeek.setDate(lastWeek.getDate() - 7);
+          return orderDate >= lastWeek;
+        } catch (error) {
+          console.warn('Invalid order date:', order.createdAt);
+          return false;
+        }
       }),
       last30d: orders.filter(order => {
-        const orderDate = new Date(order.createdAt);
-        const thirtyDaysAgo = new Date(now);
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-        return orderDate >= thirtyDaysAgo;
+        try {
+          const orderDate = new Date(order.createdAt);
+          const thirtyDaysAgo = new Date(now);
+          thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+          return orderDate >= thirtyDaysAgo;
+        } catch (error) {
+          console.warn('Invalid order date:', order.createdAt);
+          return false;
+        }
       })
     };
 
-    // Calculate metrics for different time periods
+    // Calculate metrics for different time periods with error handling
     const calculateMetrics = (orders: any[]) => {
-      const totalRevenue = orders.reduce((sum: number, order: any) => sum + parseFloat(order.total), 0);
+      const totalRevenue = orders.reduce((sum: number, order: any) => {
+        try {
+          return sum + parseFloat(order.total || '0');
+        } catch (error) {
+          console.warn('Invalid order total:', order.total);
+          return sum;
+        }
+      }, 0);
       const averageOrderValue = orders.length > 0 ? totalRevenue / orders.length : 0;
       return {
         totalOrders: orders.length,
@@ -364,6 +471,11 @@ export async function handleRestaurantChat(message: ChatMessage): Promise<string
       last30d: calculateMetrics(recentOrders.last30d)
     };
 
+    // Calculate average rating with error handling
+    const averageRating = feedback.length > 0 ? 
+      (feedback.reduce((sum, f) => sum + (f.rating || 0), 0) / feedback.length).toFixed(1) : 
+      'N/A';
+
     const restaurantContext = {
       restaurant: {
         name: restaurant.name,
@@ -372,9 +484,7 @@ export async function handleRestaurantChat(message: ChatMessage): Promise<string
       currentMetrics: {
         ...metrics.last30d,
         menuItems: menuItems.length,
-        averageRating: feedback.length > 0 ? 
-          (feedback.reduce((sum, f) => sum + f.rating, 0) / feedback.length).toFixed(1) : 
-          'N/A',
+        averageRating,
         activeOrders: activeOrders.length,
         occupiedTables: tables.filter(t => t.isOccupied).length,
         totalTables: tables.length
@@ -383,19 +493,33 @@ export async function handleRestaurantChat(message: ChatMessage): Promise<string
       popularItems: popularItems.map(item => ({
         name: item.name,
         orderCount: item.count,
-        revenue: parseFloat(item.price) * item.count
+        revenue: parseFloat(item.price || '0') * item.count
       })),
       recentFeedback: feedback
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .sort((a, b) => {
+          try {
+            return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+          } catch (error) {
+            return 0;
+          }
+        })
         .slice(0, 5)
         .map(f => ({
-          rating: f.rating,
-          comment: f.comment,
+          rating: f.rating || 0,
+          comment: f.comment || '',
           createdAt: f.createdAt
         }))
     };
 
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = genAI.getGenerativeModel({ 
+      model: 'gemini-1.5-flash',
+      generationConfig: {
+        temperature: 0.7,
+        topP: 0.8,
+        topK: 40,
+        maxOutputTokens: 1024,
+      }
+    });
 
     const prompt = `
 You are an expert AI restaurant consultant helping owners understand their business data and make informed decisions.
@@ -420,13 +544,22 @@ Guidelines:
 - Use customer feedback quotes to support recommendations
 - Consider table occupancy and operational efficiency
 - Make recommendations based on the complete context
+- If data is limited, acknowledge this and suggest what additional data would be helpful
+- Be specific about timeframes when discussing trends
+- Use bullet points for recommendations when appropriate
 
-If you need additional data not in the context, specify what metrics would help refine the analysis.
+Response format:
+Provide a clear, structured response that directly answers the user's question while incorporating relevant data from the restaurant context.
 `;
 
     const result = await model.generateContent(prompt);
     const response = await result.response;
-    return response.text();
+    const text = response.text();
+
+    // Cache the response
+    setCachedData(cacheKey, text);
+
+    return text;
 
   } catch (error) {
     console.error('Error in restaurant chat:', error);
