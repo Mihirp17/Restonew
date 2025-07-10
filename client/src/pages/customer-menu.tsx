@@ -995,7 +995,16 @@ export default function CustomerMenu() {
 
         {/* Menu Items */}
         <div className="px-6 pb-32 space-y-4">
-          {filteredMenuItems.length > 0 ? (
+          {isLoading ? (
+            <div className="text-center py-16">
+              <div className="w-16 h-16 mx-auto mb-4 animate-spin text-red-500">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2v4M22 11h-4M6 20v-4M2 11a10 10 0 0 1 10-10 10 10 0 0 1 10 10-10 10 0 0 1-10 10 10 10 0 0 1-10-10"/>
+                </svg>
+              </div>
+              <p className="text-gray-900 text-lg font-medium">Loading menu...</p>
+            </div>
+          ) : filteredMenuItems.length > 0 ? (
             filteredMenuItems.map((item) => (
               <Card key={item.id} className="overflow-hidden border-gray-200 shadow-lg hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1 bg-white rounded-2xl group">
                 <CardContent className="p-0">
