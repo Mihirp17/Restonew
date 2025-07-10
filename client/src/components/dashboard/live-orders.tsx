@@ -132,7 +132,7 @@ export const LiveOrders = memo(({ restaurantId }: LiveOrdersProps) => {
   const { activeOrders, updateOrderStatus, isLoading } = useOrders(restaurantId || 0, { 
     lightweight: true, 
     limit: 10 
-  }) as { activeOrders: OrderType[]; updateOrderStatus: (args: { orderId: number; status: OrderType['status'] }) => Promise<void>; isLoading: boolean };
+  });
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { t } = useLang();
@@ -143,10 +143,10 @@ export const LiveOrders = memo(({ restaurantId }: LiveOrdersProps) => {
   // Handle order status update
   const handleUpdateStatus = useCallback(async (
     orderId: number,
-    status: OrderType['status']
+    status: string
   ) => {
     try {
-      await updateOrderStatus({ orderId, status });
+      await updateOrderStatus({ orderId, status: status as OrderType['status'] });
       
       // NOTE: Removed automatic table status update on order completion
       // Tables should only be marked as vacant when all bills are paid,

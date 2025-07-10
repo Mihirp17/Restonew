@@ -382,7 +382,7 @@ export default function Dashboard() {
         </div>
 
         {/* AI Insights Section */}
-        <NewAIInsights restaurantId={restaurantId} />
+        {restaurantId && <NewAIInsights restaurantId={restaurantId} />}
       </div>
 
       {/* Waiter Request Details Dialog */}

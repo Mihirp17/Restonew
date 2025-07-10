@@ -942,7 +942,7 @@ export class DatabaseStorage implements IStorage {
   async getBillsByTableSessionId(tableSessionId: number, limit: number = 30, offset: number = 0): Promise<Bill[]> {
     return await db.select().from(bills)
       .where(eq(bills.tableSessionId, tableSessionId))
-      .orderBy(bills.createdAt, 'desc')
+      .orderBy(desc(bills.createdAt))
       .limit(limit)
       .offset(offset);
   }

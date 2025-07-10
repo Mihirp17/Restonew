@@ -16,7 +16,7 @@ const TableCard = memo(({
   onToggleOccupied, 
   t 
 }: { 
-  table: TableType & { groupId?: number; createdAt?: string | Date; updatedAt?: string | Date };
+  table: TableType;
   onToggleOccupied: (tableId: number, isOccupied: boolean) => void; 
   t: any;
 }) => {
@@ -54,7 +54,7 @@ TableCard.displayName = 'TableCard';
 
 export const TablesOverview = memo(function TablesOverview({ restaurantId }: TablesOverviewProps) {
   const queryClient = useQueryClient();
-  const { tables = [], isLoading, updateTable } = useTables(restaurantId || 0) as { tables: (TableType & { groupId?: number; createdAt?: string | Date; updatedAt?: string | Date })[]; isLoading: boolean; updateTable: (args: { tableId: number; data: Partial<TableType> }) => Promise<void> };
+  const { tables = [], isLoading, updateTable } = useTables(restaurantId || 0);
   const { t } = useLang();
 
   // Toggle table occupancy status
@@ -117,7 +117,7 @@ export const TablesOverview = memo(function TablesOverview({ restaurantId }: Tab
           tables.map((table) => (
             <TableCard 
               key={table.id}
-              table={table} 
+              table={table as any} 
               onToggleOccupied={handleToggleOccupied} 
               t={t} 
             />
