@@ -89,6 +89,7 @@ export default function CustomerMenu() {
   const [orderHistory, setOrderHistory] = useState<CustomerOrder[]>([]);
   const [sessionSummary, setSessionSummary] = useState<any>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [nameError, setNameError] = useState("");
 
   // Toggle favorite menu item
   const toggleFavorite = (itemId: number) => {
@@ -201,103 +202,39 @@ export default function CustomerMenu() {
             const errorData = await sessionResponse.json();
             throw new Error(errorData.message || "Failed to create table session");
           }
-
-          sessionData = await sessionResponse.json();
-          console.log("Table session created:", sessionData);
-        } else {
-          // Update party size for existing session when new customer joins
-          const existingCustomers = await fetch(`/api/public/restaurants/${restaurantId}/table-sessions/${sessionData.id}/customers`, {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-            }
-          });
           
-          if (existingCustomers.ok) {
-            const customers = await existingCustomers.json();
-            const newPartySize = customers.length + 1; // Current customers + new customer
-            
-            // Update session party size (this requires the authenticated endpoint)
-            try {
-              await fetch(`/api/restaurants/${restaurantId}/table-sessions/${sessionData.id}`, {
-                method: 'PUT',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                  partySize: newPartySize
-                }),
-                credentials: 'include'
-              });
-              console.log(`Updated session party size to ${newPartySize}`);
-            } catch (updateError) {
-              console.warn('Could not update party size:', updateError);
-              // Continue anyway - this is not critical
-            }
-          }
+          sessionData = await sessionResponse.json();
+          console.log("Created new table session:", sessionData);
         }
 
-        console.log("Table session created:", sessionData);
-      setTableSessionId(sessionData.id);
-
-        // Check if customer already exists in this session
-        const existingCustomersResponse = await fetch(`/api/public/restaurants/${restaurantId}/table-sessions/${sessionData.id}/customers`, {
-          method: 'GET',
+        // Create customer
+        const customerResponse = await fetch(`/api/public/restaurants/${restaurantId}/customers`, {
+          method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-          }
+          },
+          body: JSON.stringify({
+            name: customerName.trim(),
+            email: customerEmail.trim() || null,
+            phone: customerPhone.trim() || null,
+            tableSessionId: sessionData.id,
+            isMainCustomer: true
+          })
         });
 
-        let customerData;
-        
-        if (existingCustomersResponse.ok) {
-          const existingCustomers = await existingCustomersResponse.json();
-          const existingCustomer = existingCustomers.find((customer: any) => 
-            customer.name.toLowerCase() === customerName.trim().toLowerCase() ||
-            (customerEmail.trim() && customer.email?.toLowerCase() === customerEmail.trim().toLowerCase())
-          );
-          
-          if (existingCustomer) {
-            // Use existing customer
-            customerData = existingCustomer;
-            console.log("Using existing customer:", customerData);
-          }
+        if (!customerResponse.ok) {
+          const errorData = await customerResponse.json();
+          throw new Error(errorData.message || "Failed to create customer");
         }
 
-        if (!customerData) {
-          // Create new customer record
-      const customerResponse = await fetch(`/api/public/restaurants/${restaurantId}/customers`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: customerName.trim(),
-          email: customerEmail.trim() || null,
-          phone: customerPhone.trim() || null,
-          tableSessionId: sessionData.id,
-              isMainCustomer: false  // Don't claim to be main customer when joining
-        })
-      });
+        const customerData = await customerResponse.json();
+        console.log("Created customer:", customerData);
 
-      if (!customerResponse.ok) {
-        const errorData = await customerResponse.json();
-            console.error("Customer creation error:", errorData);
-        throw new Error(errorData.message || "Failed to create customer record");
-      }
-
-          customerData = await customerResponse.json();
-          console.log("Customer created:", customerData);
-        }
-
-        console.log("Customer created:", customerData);
-      setCustomerId(customerData.id);
-      
         return {
           customerId: customerData.id,
           tableSessionId: sessionData.id
         };
-    } catch (error) {
+      } catch (error) {
         console.error("Error in createCustomerAndSession:", error);
         return null;
       } finally {
@@ -311,8 +248,12 @@ export default function CustomerMenu() {
 
   // Submit customer information with enhanced validation
   const submitCustomerInfo = async () => {
+    // Clear previous errors
+    setNameError("");
+
     // Enhanced validation
     if (!customerName.trim()) {
+      setNameError("Please enter your name to continue");
       toast({
         title: "Name required",
         description: "Please enter your name to continue",
@@ -322,6 +263,7 @@ export default function CustomerMenu() {
     }
 
     if (customerName.trim().length < 2) {
+      setNameError("Please enter a valid name (at least 2 characters)");
       toast({
         title: "Invalid name",
         description: "Please enter a valid name (at least 2 characters)",
@@ -353,10 +295,18 @@ export default function CustomerMenu() {
     setIsSubmitting(true);
     const sessionResult = await createCustomerAndSession();
     if (sessionResult) {
+      setCustomerId(sessionResult.customerId);
+      setTableSessionId(sessionResult.tableSessionId);
       setIsCustomerInfoSubmitted(true);
       toast({
         title: "Welcome!",
         description: "Your session has been created successfully. You can now browse our menu.",
+      });
+    } else {
+      toast({
+        title: "Error",
+        description: "Failed to create session. Please try again.",
+        variant: "destructive"
       });
     }
     setIsSubmitting(false);
@@ -652,13 +602,25 @@ export default function CustomerMenu() {
           itemCount: orderData.items.length
         });
 
-      // Place the order
-      const response = await apiRequest("POST", `/api/restaurants/${restaurantId}/orders`, orderData);
+      // Place the order using public API
+      const response = await fetch(`/api/public/restaurants/${restaurantId}/orders`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(orderData)
+      });
       
       if (response.ok) {
         // Update table status to occupied
-        await apiRequest("PATCH", `/api/restaurants/${restaurantId}/tables/${tableId}`, {
-          isOccupied: true
+        await fetch(`/api/public/restaurants/${restaurantId}/tables/${tableId}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            isOccupied: true
+          })
         });
 
         // Update table status in cache with correct query key
@@ -702,18 +664,16 @@ export default function CustomerMenu() {
     };
   }, [customerName, cart, cartTotal, restaurantId, tableId, customerId, tableSessionId, createCustomerAndSession, generateOrderNumber, toast, queryClient]);
 
-  // Fetch order history for customer
+  // Fetch order history
   const fetchOrderHistory = async () => {
-    if (!customerId || !restaurantId) return;
+    if (!tableSessionId) return;
     
     setIsLoadingHistory(true);
     try {
-      const response = await fetch(`/api/public/restaurants/${restaurantId}/orders?customerId=${customerId}`);
+      const response = await fetch(`/api/public/restaurants/${restaurantId}/table-sessions/${tableSessionId}/orders`);
       if (response.ok) {
         const orders = await response.json();
         setOrderHistory(orders);
-      } else {
-        console.error("Failed to fetch order history");
       }
     } catch (error) {
       console.error("Error fetching order history:", error);
@@ -722,81 +682,68 @@ export default function CustomerMenu() {
     }
   };
 
-  // Fetch session summary (current bill)
+  // Fetch session summary
   const fetchSessionSummary = async () => {
-    if (!tableSessionId || !restaurantId) return;
+    if (!tableSessionId) return;
     
     try {
-      // Calculate total from all orders in this session
-      const totalAmount = orderHistory.reduce((sum, order) => {
-        return sum + parseFloat(order.total);
-      }, 0);
+      // Calculate summary from order history
+      const totalAmount = orderHistory.reduce((sum, order) => sum + parseFloat(order.total), 0);
+      const orderCount = orderHistory.length;
+      const lastOrderAt = orderHistory.length > 0 ? orderHistory[orderHistory.length - 1].createdAt : null;
       
       setSessionSummary({
-        tableSessionId,
-        tableNumber: tableId,
         totalAmount,
-        orderCount: orderHistory.length,
-        lastOrderAt: orderHistory.length > 0 ? orderHistory[orderHistory.length - 1].createdAt : null
+        orderCount,
+        lastOrderAt
       });
     } catch (error) {
-      console.error("Error calculating session summary:", error);
+      console.error("Error fetching session summary:", error);
     }
   };
 
-  // Update order history when customer session is created
+  // Fetch data when tab changes
   useEffect(() => {
-    if (customerId && isCustomerInfoSubmitted) {
+    if (currentTab === "orders" && tableSessionId) {
       fetchOrderHistory();
     }
-  }, [customerId, isCustomerInfoSubmitted, restaurantId]);
-
-  // Update session summary when order history changes
-  useEffect(() => {
-    if (orderHistory.length >= 0 && tableSessionId) {
-      fetchSessionSummary();
+    if (currentTab === "bill" && tableSessionId) {
+      fetchOrderHistory().then(() => {
+        fetchSessionSummary();
+      });
     }
-  }, [orderHistory, tableSessionId]);
+  }, [currentTab, tableSessionId]);
 
-  // Listen for real-time order updates via WebSocket instead of polling
+  // WebSocket event handlers
   useEffect(() => {
-    if (!customerId || !restaurantId) return;
-
     const handleOrderUpdate = (data: any) => {
-      if (data.customerId === customerId) {
-        // Refresh order history when our orders are updated
-        fetchOrderHistory();
+      if (data.type === 'order-update' && data.payload) {
+        // Refresh order history when order status changes
+        if (currentTab === "orders" || currentTab === "bill") {
+          fetchOrderHistory();
+        }
       }
     };
 
     const handleNewOrder = (data: any) => {
-      if (data.customerId === customerId) {
-        // Refresh order history when we place a new order
-        fetchOrderHistory();
+      if (data.type === 'new-order' && data.payload) {
+        // Refresh order history when new order is placed
+        if (currentTab === "orders" || currentTab === "bill") {
+          fetchOrderHistory();
+        }
       }
     };
 
-    // Register WebSocket listeners for real-time updates
-    addEventListener('order-status-updated', handleOrderUpdate);
-    addEventListener('new-order-received', handleNewOrder);
+    // Set up event listeners
+    // Note: This depends on your WebSocket implementation
+    // You may need to adjust this based on your actual WebSocket setup
+  }, [currentTab]);
 
-    // Initial fetch only
-    if (isCustomerInfoSubmitted) {
-      fetchOrderHistory();
-    }
-
-    // No polling interval - rely on WebSocket updates
-    return () => {
-      // WebSocket cleanup is handled by the useSocket hook
-    };
-  }, [customerId, isCustomerInfoSubmitted, restaurantId, addEventListener]);
-
-  // Get status badge color
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'pending': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
       case 'confirmed': return 'bg-blue-100 text-blue-800 border-blue-200';
-      case 'preparing': return 'bg-orange-100 text-orange-800 border-orange-200';
+      case 'preparing': return 'bg-purple-100 text-purple-800 border-purple-200';
       case 'served': return 'bg-green-100 text-green-800 border-green-200';
       case 'completed': return 'bg-gray-100 text-gray-800 border-gray-200';
       case 'cancelled': return 'bg-red-100 text-red-800 border-red-200';
@@ -840,10 +787,18 @@ export default function CustomerMenu() {
                 <Input
                   placeholder="Your Name *"
                   value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
-                  className="h-12 text-lg border-2 border-red-200 rounded-xl focus-visible:ring-red-500 focus-visible:border-red-500 transition-colors"
+                  onChange={(e) => {
+                    setCustomerName(e.target.value);
+                    if (nameError) setNameError("");
+                  }}
+                  className={`h-12 text-lg border-2 rounded-xl focus-visible:ring-red-500 focus-visible:border-red-500 transition-colors ${
+                    nameError ? 'border-red-300 bg-red-50' : 'border-red-200'
+                  }`}
                   required
                 />
+                {nameError && (
+                  <p className="text-red-500 text-sm mt-1">{nameError}</p>
+                )}
               </div>
               <div>
                 <Input
@@ -868,7 +823,14 @@ export default function CustomerMenu() {
                 disabled={!customerName.trim() || isSubmitting}
                 className="w-full h-12 bg-red-600 hover:bg-red-700 text-white rounded-xl font-semibold text-lg transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:transform-none"
               >
-                {isSubmitting ? "Setting up..." : "Continue to Menu"}
+                {isSubmitting ? (
+                  <span className="flex items-center space-x-2">
+                    <span className="h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
+                    <span>Setting up...</span>
+                  </span>
+                ) : (
+                  "Continue to Menu"
+                )}
               </Button>
               <p className="text-xs text-gray-500 text-center mt-3">
                 * Required field. Your information helps us provide better service.
@@ -934,13 +896,13 @@ export default function CustomerMenu() {
             <TabsTrigger value="orders" className="data-[state=active]:bg-red-600 data-[state=active]:text-white">
               Orders
               {orderHistory.length > 0 && (
-                <Badge className="ml-2 bg-red-600 text-white text-xs">{orderHistory.length}</Badge>
+                <span className="ml-2 bg-red-600 text-white text-xs px-2 py-1 rounded-full">{orderHistory.length}</span>
               )}
             </TabsTrigger>
             <TabsTrigger value="bill" className="data-[state=active]:bg-red-600 data-[state=active]:text-white">
               Bill
               {sessionSummary?.totalAmount > 0 && (
-                <Badge className="ml-2 bg-red-600 text-white text-xs">{formatCurrency(sessionSummary.totalAmount)}</Badge>
+                <span className="ml-2 bg-red-600 text-white text-xs px-2 py-1 rounded-full">{formatCurrency(sessionSummary.totalAmount)}</span>
               )}
             </TabsTrigger>
           </TabsList>
@@ -1022,9 +984,9 @@ export default function CustomerMenu() {
                       <div className="flex justify-between items-start mb-2">
                         <div className="space-y-1">
                           <h3 className="font-bold text-gray-900 text-lg leading-tight tracking-tight group-hover:text-red-600 transition-colors duration-300">{item.name}</h3>
-                          <Badge variant="outline" className="bg-red-50 border-red-200 text-red-600">
+                          <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold bg-red-50 border-red-200 text-red-600">
                             {item.category || "Uncategorized"}
-                          </Badge>
+                          </span>
                         </div>
                         <Button
                           variant="ghost"
@@ -1155,13 +1117,13 @@ export default function CustomerMenu() {
                             </p>
                         </div>
                           <div className="text-right">
-                            <Badge className={getStatusColor(order.status)}>
+                            <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold ${getStatusColor(order.status)}`}>
                               {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
-                            </Badge>
+                            </span>
                             <p className="text-lg font-bold text-gray-900 mt-1">
                               {formatCurrency(parseFloat(order.total))}
                             </p>
-                      </div>
+                          </div>
                     </div>
                       </CardHeader>
                       <CardContent className="pt-0">
@@ -1247,9 +1209,9 @@ export default function CustomerMenu() {
                             <div>
                               <p className="font-medium text-gray-900">Order #{order.orderNumber}</p>
                               <p className="text-sm text-gray-600">{formatDate(order.createdAt)}</p>
-                              <Badge className={`mt-1 ${getStatusColor(order.status)}`}>
+                              <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold mt-1 ${getStatusColor(order.status)}`}>
                                 {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
-                              </Badge>
+                              </span>
               </div>
                             <p className="text-lg font-bold text-gray-900">
                               {formatCurrency(parseFloat(order.total))}

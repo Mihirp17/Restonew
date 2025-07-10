@@ -587,6 +587,116 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Public create order endpoint for customer menu
+  app.post('/api/public/restaurants/:restaurantId/orders', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      const { customerId, tableSessionId, orderNumber, status, total, tableId, notes, items } = req.body;
+      
+      if (!customerId || !tableSessionId || !orderNumber || !total || !tableId || !items || !Array.isArray(items)) {
+        return res.status(400).json({ message: 'Missing required fields' });
+      }
+
+      // Create the order
+      const order = await storage.createOrder({
+        customerId: parseInt(customerId),
+        tableSessionId: parseInt(tableSessionId),
+        orderNumber,
+        status: status || 'pending',
+        total: total.toString(),
+        restaurantId,
+        tableId: parseInt(tableId),
+        notes: notes || '',
+        isGroupOrder: false
+      });
+
+      // Create order items
+      for (const item of items) {
+        await storage.createOrderItem({
+          orderId: order.id,
+          menuItemId: parseInt(item.menuItemId),
+          quantity: parseInt(item.quantity),
+          price: item.price.toString()
+        });
+      }
+
+      // Get the complete order with items
+      const completeOrder = await storage.getOrder(order.id);
+      
+      return res.status(201).json(completeOrder);
+    } catch (error) {
+      console.error('Error creating order:', error);
+      return res.status(500).json({ message: 'Failed to create order' });
+    }
+  });
+
+  // Public get orders for table session endpoint
+  app.get('/api/public/restaurants/:restaurantId/table-sessions/:sessionId/orders', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const sessionId = parseInt(req.params.sessionId);
+      
+      if (isNaN(restaurantId) || isNaN(sessionId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or session ID' });
+      }
+
+      // Get customers for this session
+      const customers = await storage.getCustomersByTableSessionId(sessionId);
+      
+      // Get orders for each customer
+      const allOrders = [];
+      for (const customer of customers) {
+        const customerOrders = await storage.getOrdersByRestaurantId(restaurantId, {
+          startDate: new Date(Date.now() - 24 * 60 * 60 * 1000), // Last 24 hours
+          endDate: new Date()
+        });
+        
+        const sessionOrders = customerOrders.filter(order => 
+          order.customerId === customer.id && 
+          order.tableSessionId === sessionId
+        );
+        
+        allOrders.push(...sessionOrders);
+      }
+
+      return res.json(allOrders);
+    } catch (error) {
+      console.error('Error fetching orders:', error);
+      return res.status(500).json({ message: 'Failed to fetch orders' });
+    }
+  });
+
+  // Public update table endpoint for customer menu
+  app.patch('/api/public/restaurants/:restaurantId/tables/:tableId', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const tableId = parseInt(req.params.tableId);
+      
+      if (isNaN(restaurantId) || isNaN(tableId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or table ID' });
+      }
+
+      const { isOccupied } = req.body;
+      
+      const updatedTable = await storage.updateTable(tableId, {
+        isOccupied: Boolean(isOccupied)
+      });
+
+      if (!updatedTable) {
+        return res.status(404).json({ message: 'Table not found' });
+      }
+
+      return res.json(updatedTable);
+    } catch (error) {
+      console.error('Error updating table:', error);
+      return res.status(500).json({ message: 'Failed to update table' });
+    }
+  });
+
   app.post('/api/restaurants/:restaurantId/menu-items', authenticate, authorizeRestaurant, async (req, res) => {
     try {
       const restaurantId = parseInt(req.params.restaurantId);
