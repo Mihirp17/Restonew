@@ -5,8 +5,11 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { Bot, User, Send, Zap, TrendingUp, BarChart3, UtensilsCrossed, Users } from "lucide-react";
+import { Bot, User, Send, Zap, TrendingUp, BarChart3, UtensilsCrossed, Users, Settings, RefreshCw, MessageSquare, Brain } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface Message {
   id: string;
@@ -23,22 +26,38 @@ const QUICK_ACTIONS = [
   {
     icon: TrendingUp,
     label: "Revenue Analysis",
-    query: "How is my restaurant's revenue performing this month? What trends do you see?"
+    query: "How is my restaurant's revenue performing this month? What trends do you see?",
+    category: "revenue"
   },
   {
     icon: UtensilsCrossed,
     label: "Menu Optimization",
-    query: "Which menu items are performing best and which ones should I consider promoting or removing?"
+    query: "Which menu items are performing best and which ones should I consider promoting or removing?",
+    category: "menu"
   },
   {
     icon: Users,
     label: "Customer Insights",
-    query: "What insights can you provide about my customers and their satisfaction levels?"
+    query: "What insights can you provide about my customers and their satisfaction levels?",
+    category: "customers"
   },
   {
     icon: BarChart3,
     label: "Operations",
-    query: "How can I improve my restaurant's operational efficiency and reduce wait times?"
+    query: "How can I improve my restaurant's operational efficiency and reduce wait times?",
+    category: "operations"
+  },
+  {
+    icon: Brain,
+    label: "Strategic Planning",
+    query: "What strategic opportunities should I focus on for business growth?",
+    category: "strategy"
+  },
+  {
+    icon: MessageSquare,
+    label: "Performance Review",
+    query: "Give me a comprehensive overview of my restaurant's current performance and key metrics.",
+    category: "analytics"
   }
 ];
 
@@ -54,6 +73,14 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
+  const [sessionId] = useState(() => `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
+  const [userPreferences, setUserPreferences] = useState({
+    detailLevel: 'detailed' as 'brief' | 'detailed' | 'technical',
+    focusAreas: ['revenue', 'operations', 'customer_satisfaction'] as string[]
+  });
+  const [showSettings, setShowSettings] = useState(false);
+  const [conversationHistory, setConversationHistory] = useState<Array<{role: 'user' | 'assistant', content: string, timestamp: string}>>([]);
+  
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
@@ -68,7 +95,7 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
     }
   }, [messages, isTyping]);
 
-  // Send message
+  // Send message with enhanced context
   const sendMessage = async (content: string) => {
     if (!content.trim() || isLoading) return;
 
@@ -84,18 +111,33 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
     setIsLoading(true);
     setIsTyping(true);
 
+    // Update conversation history
+    const updatedHistory = [...conversationHistory, {
+      role: 'user' as const,
+      content: content.trim(),
+      timestamp: new Date().toISOString()
+    }];
+    setConversationHistory(updatedHistory);
+
     try {
       const response = await apiRequest('POST', `/api/restaurants/${restaurantId}/ai-chat`, {
-        message: content.trim()
+        message: content.trim(),
+        context: {
+          restaurantId,
+          sessionId,
+          conversationHistory: updatedHistory.slice(-10), // Last 10 messages for context
+          userPreferences,
+          timeframe: '30d'
+        }
       });
 
       const data = await response.json();
 
-      // Simulate typing delay
+      // Simulate typing delay for better UX
       setTimeout(() => {
         const aiMessage: Message = {
           id: (Date.now() + 1).toString(),
-          content: data.reply, // Use the correct property from backend
+          content: data.reply,
           isUser: false,
           timestamp: new Date()
         };
@@ -103,6 +145,13 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
         setMessages(prev => [...prev, aiMessage]);
         setIsTyping(false);
         setIsLoading(false);
+
+        // Update conversation history with AI response
+        setConversationHistory(prev => [...prev, {
+          role: 'assistant' as const,
+          content: data.reply,
+          timestamp: new Date().toISOString()
+        }]);
       }, 1000);
 
     } catch (error) {
@@ -138,6 +187,17 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
     sendMessage(query);
   };
 
+  // Clear conversation
+  const clearConversation = () => {
+    setMessages([{
+      id: '1',
+      content: "Hi! I'm your AI restaurant assistant. I can help you analyze your performance, optimize your menu, understand your customers, and improve your operations. What would you like to know about your restaurant?",
+      isUser: false,
+      timestamp: new Date()
+    }]);
+    setConversationHistory([]);
+  };
+
   // Format timestamp
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -163,14 +223,122 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
   );
 
   return (
-    <Card className="h-[600px] flex flex-col">
-      <CardHeader className="pb-3">
-        <CardTitle className="flex items-center space-x-2">
-          <div className="p-2 bg-purple-100 rounded-lg">
-            <Bot className="h-5 w-5 text-purple-600" />
+    <Card className="h-[600px] flex flex-col bg-gradient-to-br from-white to-purple-50/30 border-purple-200">
+      <CardHeader className="pb-3 border-b border-purple-100">
+        <div className="flex items-center justify-between">
+          <CardTitle className="flex items-center space-x-2">
+            <div className="p-2 bg-gradient-to-r from-purple-500 to-purple-600 rounded-lg shadow-sm">
+              <Bot className="h-5 w-5 text-white" />
+            </div>
+            <div>
+              <span className="text-lg font-semibold text-gray-900">AI Assistant</span>
+              <div className="flex items-center space-x-2 mt-1">
+                <Badge variant="secondary" className="text-xs bg-purple-100 text-purple-700">
+                  {userPreferences.detailLevel}
+                </Badge>
+                <Badge variant="outline" className="text-xs">
+                  {conversationHistory.length} messages
+                </Badge>
+              </div>
+            </div>
+          </CardTitle>
+          <div className="flex items-center space-x-2">
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowSettings(!showSettings)}
+                    className="h-8 w-8 p-0"
+                  >
+                    <Settings className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Chat Settings</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={clearConversation}
+                    className="h-8 w-8 p-0"
+                    disabled={messages.length <= 1}
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Clear Conversation</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
-          <span>AI Assistant</span>
-        </CardTitle>
+        </div>
+
+        {/* Settings Panel */}
+        <AnimatePresence>
+          {showSettings && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="mt-3 p-3 bg-white rounded-lg border border-purple-200"
+            >
+              <div className="space-y-3">
+                <div>
+                  <label className="text-sm font-medium text-gray-700 mb-1 block">
+                    Detail Level
+                  </label>
+                  <Select
+                    value={userPreferences.detailLevel}
+                    onValueChange={(value: 'brief' | 'detailed' | 'technical') =>
+                      setUserPreferences(prev => ({ ...prev, detailLevel: value }))
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="brief">Brief</SelectItem>
+                      <SelectItem value="detailed">Detailed</SelectItem>
+                      <SelectItem value="technical">Technical</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700 mb-1 block">
+                    Focus Areas
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {['revenue', 'menu', 'operations', 'customers', 'analytics'].map((area) => (
+                      <Badge
+                        key={area}
+                        variant={userPreferences.focusAreas.includes(area) ? "default" : "outline"}
+                        className="cursor-pointer hover:bg-purple-100"
+                        onClick={() => {
+                          setUserPreferences(prev => ({
+                            ...prev,
+                            focusAreas: prev.focusAreas.includes(area)
+                              ? prev.focusAreas.filter(a => a !== area)
+                              : [...prev.focusAreas, area]
+                          }));
+                        }}
+                      >
+                        {area}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </CardHeader>
 
       <CardContent className="flex-1 flex flex-col p-0">
@@ -184,25 +352,27 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
                 animate={{ opacity: 1, y: 0 }}
                 className={`flex ${message.isUser ? 'justify-end' : 'justify-start'} w-full`}
               >
-                <div className={`flex items-start space-x-2 max-w-[80%] ${message.isUser ? 'flex-row-reverse space-x-reverse' : ''}`}>
-                  <div className={`flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-full ${
+                <div className={`flex items-start space-x-2 max-w-[85%] ${message.isUser ? 'flex-row-reverse space-x-reverse' : ''}`}>
+                  <div className={`flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-full shadow-sm ${
                     message.isUser 
-                      ? 'bg-blue-100' 
-                      : 'bg-purple-100'
+                      ? 'bg-gradient-to-r from-blue-500 to-blue-600' 
+                      : 'bg-gradient-to-r from-purple-500 to-purple-600'
                   }`}>
                     {message.isUser ? (
-                      <User className="h-4 w-4 text-blue-600" />
+                      <User className="h-4 w-4 text-white" />
                     ) : (
-                      <Bot className="h-4 w-4 text-purple-600" />
+                      <Bot className="h-4 w-4 text-white" />
                     )}
                   </div>
                   <div className={`flex flex-col ${message.isUser ? 'items-end' : 'items-start'} max-w-full overflow-hidden`}>
-                    <div className={`rounded-lg p-3 overflow-hidden ${
+                    <div className={`rounded-lg p-3 shadow-sm overflow-hidden ${
                       message.isUser
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-100 text-gray-900'
+                        ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white'
+                        : 'bg-white border border-purple-200 text-gray-900'
                     }`}>
-                      <p className="text-sm whitespace-pre-wrap break-words overflow-wrap-anywhere">{message.content}</p>
+                      <p className="text-sm whitespace-pre-wrap break-words overflow-wrap-anywhere leading-relaxed">
+                        {message.content}
+                      </p>
                     </div>
                     <span className="text-xs text-gray-500 mt-1">{formatTime(message.timestamp)}</span>
                   </div>
@@ -219,7 +389,7 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
         {/* Quick Actions */}
         {messages.length <= 1 && (
           <div className="px-4 pb-4">
-            <p className="text-sm text-gray-600 mb-3">Quick questions:</p>
+            <p className="text-sm text-gray-600 mb-3 font-medium">Quick questions:</p>
             <div className="grid grid-cols-2 gap-2">
               {QUICK_ACTIONS.map((action, index) => (
                 <Button
@@ -228,12 +398,15 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
                   size="sm"
                   onClick={() => handleQuickAction(action.query)}
                   disabled={isLoading}
-                  className="h-auto p-3 flex flex-col items-start text-left hover:bg-purple-50 hover:border-purple-200"
+                  className="h-auto p-3 flex flex-col items-start text-left hover:bg-purple-50 hover:border-purple-300 transition-colors"
                 >
                   <div className="flex items-center space-x-2 mb-1">
                     <action.icon className="h-4 w-4 text-purple-600" />
                     <span className="font-medium text-xs">{action.label}</span>
                   </div>
+                  <Badge variant="secondary" className="text-xs bg-purple-100 text-purple-700">
+                    {action.category}
+                  </Badge>
                 </Button>
               ))}
             </div>
@@ -241,7 +414,7 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
         )}
 
         {/* Input */}
-        <div className="p-4 border-t">
+        <div className="p-4 border-t border-purple-100 bg-white">
           <form onSubmit={handleSubmit} className="flex space-x-2">
             <Input
               ref={inputRef}
@@ -250,19 +423,20 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
               onChange={(e) => setInputValue(e.target.value)}
               placeholder="Ask me anything about your restaurant..."
               disabled={isLoading}
-              className="flex-1"
+              className="flex-1 border-purple-200 focus:border-purple-400 focus:ring-purple-400"
             />
-            <Button 
-              type="submit" 
-              disabled={!inputValue.trim() || isLoading}
-              className="bg-purple-600 hover:bg-purple-700 text-white"
+            <Button
+              type="submit"
+              disabled={isLoading || !inputValue.trim()}
+              className="bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white px-4"
             >
               <Send className="h-4 w-4" />
             </Button>
           </form>
-          <p className="text-xs text-gray-500 mt-2">
-            Ask about revenue, menu performance, customer feedback, or operational improvements.
-          </p>
+          <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
+            <span>AI powered by Gemini</span>
+            <span>Session: {sessionId.slice(-8)}</span>
+          </div>
         </div>
       </CardContent>
     </Card>
