@@ -587,6 +587,94 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Public menu items endpoint for customer menu
+  app.get('/api/public/restaurants/:restaurantId/menu-items', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      const menuItems = await storage.getMenuItems(restaurantId);
+      // Return only available menu items for customers
+      const availableItems = menuItems.filter(item => item.isAvailable);
+      return res.json(availableItems);
+    } catch (error) {
+      console.error('Error fetching menu items:', error);
+      return res.status(500).json({ message: 'Failed to fetch menu items' });
+    }
+  });
+
+  // Public orders endpoint for customer menu
+  app.get('/api/public/restaurants/:restaurantId/orders', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const customerId = req.query.customerId ? parseInt(req.query.customerId as string) : undefined;
+      
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      if (!customerId || isNaN(customerId)) {
+        return res.status(400).json({ message: 'Valid customer ID is required' });
+      }
+
+      const orders = await storage.getOrdersByRestaurantId(restaurantId);
+      // Filter orders by customer ID
+      const customerOrders = orders.filter(order => order.customerId === customerId);
+      return res.json(customerOrders);
+    } catch (error) {
+      console.error('Error fetching orders:', error);
+      return res.status(500).json({ message: 'Failed to fetch orders' });
+    }
+  });
+
+  // Public create order endpoint for customer menu
+  app.post('/api/public/restaurants/:restaurantId/orders', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      const { customerId, tableSessionId, orderNumber, status, total, tableId, notes, items } = req.body;
+      
+      if (!customerId || !tableSessionId || !orderNumber || !total || !tableId || !items || !Array.isArray(items)) {
+        return res.status(400).json({ message: 'Missing required order fields' });
+      }
+
+      const order = await storage.createOrder({
+        customerId: parseInt(customerId),
+        tableSessionId: parseInt(tableSessionId),
+        orderNumber,
+        status: status || 'pending',
+        total: total.toString(),
+        restaurantId,
+        tableId: parseInt(tableId),
+        notes: notes || '',
+        isGroupOrder: false
+      });
+
+      // Create order items
+      for (const item of items) {
+        await storage.createOrderItem({
+          orderId: order.id,
+          menuItemId: parseInt(item.menuItemId),
+          quantity: parseInt(item.quantity),
+          price: item.price.toString()
+        });
+      }
+
+      // Update table status to occupied
+      await storage.updateTable(tableId, { isOccupied: true });
+
+      return res.status(201).json(order);
+    } catch (error) {
+      console.error('Error creating order:', error);
+      return res.status(500).json({ message: 'Failed to create order' });
+    }
+  });
+
   app.post('/api/restaurants/:restaurantId/menu-items', authenticate, authorizeRestaurant, async (req, res) => {
     try {
       const restaurantId = parseInt(req.params.restaurantId);

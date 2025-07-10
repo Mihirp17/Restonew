@@ -120,14 +120,13 @@ export default function CustomerMenu() {
         const restaurantData = await restaurantResponse.json();
         setRestaurant(restaurantData);
         
-        // Fetch menu items
-        const menuResponse = await fetch(`/api/restaurants/${restaurantId}/menu-items`);
+        // Fetch menu items from public endpoint
+        const menuResponse = await fetch(`/api/public/restaurants/${restaurantId}/menu-items`);
         if (!menuResponse.ok) throw new Error("Failed to fetch menu items");
         const menuData = await menuResponse.json();
         
-        // Filter only available items
-        const availableItems = menuData.filter((item: MenuItem) => item.isAvailable);
-        setMenuItems(availableItems);
+        // Menu items are already filtered for availability on the server
+        setMenuItems(menuData);
       } catch (error) {
         console.error("Error fetching data:", error);
         toast({
@@ -652,17 +651,17 @@ export default function CustomerMenu() {
           itemCount: orderData.items.length
         });
 
-      // Place the order
-      const response = await apiRequest("POST", `/api/restaurants/${restaurantId}/orders`, orderData);
+      // Place the order using public endpoint
+      const response = await fetch(`/api/public/restaurants/${restaurantId}/orders`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(orderData)
+      });
       
-      if (response.ok) {
-        // Update table status to occupied
-        await apiRequest("PATCH", `/api/restaurants/${restaurantId}/tables/${tableId}`, {
-          isOccupied: true
-        });
-
-        // Update table status in cache with correct query key
-        queryClient.invalidateQueries({ queryKey: [`/api/restaurants/${restaurantId}/tables`] });
+              if (response.ok) {
+          // Table status is automatically updated on the server when order is created
         
         // Close ordering dialog and show success dialog
         setIsOrderingDialogOpen(false);
