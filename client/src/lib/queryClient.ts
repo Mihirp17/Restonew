@@ -44,7 +44,7 @@ export const getQueryFn: <T>(options: {
   };
 
 // Optimized QueryClient configuration for better performance
-export const queryClient = new QueryClient({
+export const queryClient: QueryClient = new QueryClient({
   defaultOptions: {
     queries: {
       queryFn: getQueryFn({ on401: "throw" }),
@@ -74,7 +74,7 @@ export const queryClient = new QueryClient({
       },
       retryDelay: (attemptIndex: number) => Math.min(1000 * 2 ** attemptIndex, 10000),
       // Optimistic updates for better UX
-      onMutate: async (variables: unknown) => {
+      onMutate: async (variables: unknown): Promise<{ previousData: unknown } | undefined> => {
         // Cancel any outgoing refetches
         await queryClient.cancelQueries();
         return { previousData: queryClient.getQueryData(['previousData']) };

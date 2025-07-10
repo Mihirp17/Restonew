@@ -150,7 +150,7 @@ export function BillGenerationDialog({
         });
 
         // Add bill status to customers
-        const customersWithBillStatus = customersWithOrders.map(customer => ({
+        const customersWithBillStatus = customersWithOrders.map((customer: Customer) => ({
           ...customer,
           existingBill: sessionBills.find((bill: any) => bill.customerId === customer.id),
           hasExistingBill: sessionBills.some((bill: any) => bill.customerId === customer.id)

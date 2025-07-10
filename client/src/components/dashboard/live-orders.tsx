@@ -129,10 +129,8 @@ const OrderCard = memo(({
 OrderCard.displayName = 'OrderCard';
 
 export const LiveOrders = memo(({ restaurantId }: LiveOrdersProps) => {
-  const { activeOrders, updateOrderStatus, isLoading } = useOrders(restaurantId || 0, { 
-    lightweight: true, 
-    limit: 10 
-  }) as { activeOrders: OrderType[]; updateOrderStatus: (args: { orderId: number; status: OrderType['status'] }) => Promise<void>; isLoading: boolean };
+  const ordersHook = useOrders(restaurantId || 0, { lightweight: true, limit: 10 });
+  const { activeOrders, updateOrderStatus, isLoading } = ordersHook;
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { t } = useLang();
@@ -140,32 +138,27 @@ export const LiveOrders = memo(({ restaurantId }: LiveOrdersProps) => {
   // Memoize order count calculation
   const orderCount = useMemo(() => activeOrders?.length || 0, [activeOrders?.length]);
 
-  // Handle order status update
-  const handleUpdateStatus = useCallback(async (
-    orderId: number,
-    status: OrderType['status']
-  ) => {
-    try {
-      await updateOrderStatus({ orderId, status });
-      
-      // NOTE: Removed automatic table status update on order completion
-      // Tables should only be marked as vacant when all bills are paid,
-      // which is handled by the billing system automatically
-      
-      toast({
-        title: t("success", "Success"),
-        description: `Order #${orderId} status updated to ${status}.`,
-        variant: "default",
-      });
-    } catch (error) {
-      console.error("Error updating order status:", error);
-      toast({
-        title: t("error", "Error"),
-        description: "Failed to update order status. Please try again.",
-        variant: "destructive",
-      });
-    }
-  }, [updateOrderStatus, toast, t]);
+  // Wrapper to match the expected signature for OrderCard
+  const handleUpdateStatus = useCallback(
+    async (orderId: number, status: string) => {
+      try {
+        await updateOrderStatus({ orderId, status: status as OrderType['status'] });
+        toast({
+          title: t("success", "Success"),
+          description: `Order #${orderId} status updated to ${status}.`,
+          variant: "default",
+        });
+      } catch (error) {
+        console.error("Error updating order status:", error);
+        toast({
+          title: t("error", "Error"),
+          description: "Failed to update order status. Please try again.",
+          variant: "destructive",
+        });
+      }
+    },
+    [updateOrderStatus, toast, t]
+  );
 
   if (isLoading) {
     return (
@@ -195,7 +188,7 @@ export const LiveOrders = memo(({ restaurantId }: LiveOrdersProps) => {
       <div className="p-4">
         {orderCount > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {activeOrders.map((order) => (
+            {activeOrders.map((order: OrderType) => (
               <OrderCard 
                   key={order.id} 
                 order={order}

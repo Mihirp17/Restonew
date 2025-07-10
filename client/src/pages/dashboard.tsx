@@ -382,7 +382,9 @@ export default function Dashboard() {
         </div>
 
         {/* AI Insights Section */}
-        <NewAIInsights restaurantId={restaurantId} />
+        {typeof restaurantId === 'number' && !isNaN(restaurantId) ? (
+          <NewAIInsights restaurantId={restaurantId} />
+        ) : null}
       </div>
 
       {/* Waiter Request Details Dialog */}

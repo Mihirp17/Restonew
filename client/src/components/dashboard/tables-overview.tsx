@@ -16,7 +16,7 @@ const TableCard = memo(({
   onToggleOccupied, 
   t 
 }: { 
-  table: TableType & { groupId?: number; createdAt?: string | Date; updatedAt?: string | Date };
+  table: TableType & { groupId?: number | null; createdAt?: string | Date; updatedAt?: string | Date };
   onToggleOccupied: (tableId: number, isOccupied: boolean) => void; 
   t: any;
 }) => {
@@ -54,7 +54,7 @@ TableCard.displayName = 'TableCard';
 
 export const TablesOverview = memo(function TablesOverview({ restaurantId }: TablesOverviewProps) {
   const queryClient = useQueryClient();
-  const { tables = [], isLoading, updateTable } = useTables(restaurantId || 0) as { tables: (TableType & { groupId?: number; createdAt?: string | Date; updatedAt?: string | Date })[]; isLoading: boolean; updateTable: (args: { tableId: number; data: Partial<TableType> }) => Promise<void> };
+  const { tables = [], isLoading, updateTable } = useTables(restaurantId || 0);
   const { t } = useLang();
 
   // Toggle table occupancy status
@@ -67,6 +67,13 @@ export const TablesOverview = memo(function TablesOverview({ restaurantId }: Tab
       queryClient.invalidateQueries({ queryKey: [`/api/restaurants/${restaurantId}/tables`] });
     }
   }, [restaurantId, queryClient]);
+
+  // Convert createdAt/updatedAt to Date if they are strings
+  const normalizedTables = tables.map((table: typeof tables[number]) => ({
+    ...table,
+    createdAt: typeof table.createdAt === 'string' ? new Date(table.createdAt) : table.createdAt,
+    updatedAt: typeof table.updatedAt === 'string' ? new Date(table.updatedAt) : table.updatedAt,
+  }));
 
   // Memoize loading skeleton
   const loadingSkeleton = useMemo(() => (
@@ -113,11 +120,11 @@ export const TablesOverview = memo(function TablesOverview({ restaurantId }: Tab
         </Link>
       </div>
       <div className="p-5 grid grid-cols-3 sm:grid-cols-4 gap-4">
-        {tables && tables.length > 0 ? (
-          tables.map((table) => (
+        {normalizedTables && normalizedTables.length > 0 ? (
+          normalizedTables.map((table: typeof normalizedTables[number], idx: number) => (
             <TableCard 
               key={table.id}
-              table={table} 
+              table={{ ...table, groupId: table.groupId === undefined ? null : table.groupId }}
               onToggleOccupied={handleToggleOccupied} 
               t={t} 
             />
