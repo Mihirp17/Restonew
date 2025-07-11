@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Routes, Route, useParams, useNavigate } from "react-router-dom";
 import CartModal from "./components/CartModal";
 import MenuItemCard from "./components/MenuItemCard";
 import CategoryTabs from "./components/CategoryTabs";
@@ -12,11 +13,12 @@ const mockMenu = [
   { id: 4, name: "Green Tea", desc: "Hot Japanese tea", price: 2.0, img: "https://images.unsplash.com/photo-1519864600265-abb23847ef2c?auto=format&fit=crop&w=400&q=80", category: "Drinks" },
 ];
 
-function Landing({ onSubmit }) {
+function Landing() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
+  const navigate = useNavigate();
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -25,7 +27,8 @@ function Landing({ onSubmit }) {
       return;
     }
     setError("");
-    onSubmit({ name, phone, email });
+    // For demo, use dummy restaurantId/tableId
+    navigate("/menu/1/1", { state: { name, phone, email } });
   };
 
   return (
@@ -67,7 +70,9 @@ function Landing({ onSubmit }) {
   );
 }
 
-function MenuUI({ user }) {
+function MenuUI() {
+  const { restaurantId, tableId } = useParams();
+  // TODO: Use location.state for user info if needed
   const [category, setCategory] = useState(mockCategories[0]);
   const [cart, setCart] = useState([]);
   const [showCart, setShowCart] = useState(false);
@@ -102,7 +107,7 @@ function MenuUI({ user }) {
   return (
     <div className="min-h-screen bg-gray-50 pb-24">
       <div className="sticky top-0 z-10 bg-white py-3 shadow-sm">
-        <div className="text-lg font-bold text-center text-red-600">Hi, {user.name}!</div>
+        <div className="text-lg font-bold text-center text-red-600">Table {tableId} • Restaurant {restaurantId}</div>
         <CategoryTabs categories={mockCategories} selected={category} onSelect={setCategory} />
       </div>
       <div className="p-4 grid grid-cols-1 gap-4">
@@ -140,13 +145,12 @@ function MenuUI({ user }) {
 }
 
 function App() {
-  const [user, setUser] = useState(null);
-
-  if (!user) {
-    return <Landing onSubmit={setUser} />;
-  }
-
-  return <MenuUI user={user} />;
+  return (
+    <Routes>
+      <Route path="/menu/:restaurantId/:tableId" element={<MenuUI />} />
+      <Route path="/" element={<Landing />} />
+    </Routes>
+  );
 }
 
 export default App;
