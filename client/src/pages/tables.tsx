@@ -69,8 +69,10 @@ interface TableSession {
   paidAmount?: string;
   status: string;
   startTime: string;
-  customers: Customer[];
-  table: {
+  customers?: Customer[];
+  tableNumber: number;
+  tableCapacity: number;
+  table?: {
     id: number;
     number: number;
   };
@@ -194,7 +196,7 @@ export default function Tables() {
             tableSession: {
               id: session.id,
               table: {
-                number: session.table?.number || 0
+                number: session.tableNumber || session.table?.number || 0
               }
             },
             allCustomers: session.customers || []
@@ -392,7 +394,7 @@ export default function Tables() {
             tableSession: {
               id: session.id,
               table: {
-                number: session.table?.number || 0
+                number: session.tableNumber || session.table?.number || 0
               }
             },
             allCustomers: session.customers || []
@@ -609,7 +611,7 @@ export default function Tables() {
               tableSession: {
                 id: session.id,
                 table: {
-                  number: session.table?.number || 0
+                  number: session.tableNumber || session.table?.number || 0
                 }
               },
               allCustomers: session.customers || []
@@ -770,7 +772,7 @@ export default function Tables() {
                           <div className="flex items-center space-x-2">
                             <TableIcon className="h-5 w-5 text-blue-600" />
                             <span className="font-semibold text-lg">
-                              {t("table", "Table")} {session.table?.number || t("unknown", "Unknown")}
+                              {t("table", "Table")} {session.tableNumber || t("unknown", "Unknown")}
                             </span>
                           </div>
                           <div className="flex items-center space-x-2">
@@ -798,7 +800,7 @@ export default function Tables() {
                               onClick={() => {
                                 toast({
                                   title: "Tip",
-                                  description: `Table ${session.table?.number} customers are browsing. Consider visiting them to assist with menu questions.`,
+                                  description: `Table ${session.tableNumber} customers are browsing. Consider visiting them to assist with menu questions.`,
                                 });
                               }}
                               className="text-blue-600 border-blue-600 hover:bg-blue-50"
@@ -871,7 +873,7 @@ export default function Tables() {
                           <User className="h-4 w-4 text-gray-400" />
                           <div>
                             <div className="text-sm font-medium">
-                              {session.customers.find(c => c.isMainCustomer)?.name || t("unknown", "Unknown")}
+                              {session.customers?.find(c => c.isMainCustomer)?.name || t("unknown", "Unknown")}
                             </div>
                             <div className="text-xs text-gray-500">{t("mainContact", "Main contact")}</div>
                           </div>
@@ -884,11 +886,11 @@ export default function Tables() {
                         <div className="flex items-center justify-between text-sm font-medium mb-2">
                           <span>{t("customers", "Customers:")}</span>
                           <span className="text-xs text-gray-500">
-                            {session.customers.filter(c => c.paymentStatus === 'paid').length} / {session.customers.length} {t("paid", "paid")}
+                            {session.customers?.filter(c => c.paymentStatus === 'paid').length || 0} / {session.customers?.length || 0} {t("paid", "paid")}
                           </span>
                         </div>
                         <div className="flex flex-wrap gap-2">
-                          {session.customers.map(customer => (
+                          {session.customers?.map(customer => (
                             <Badge 
                               key={customer.id} 
                               variant={customer.isMainCustomer ? "default" : "outline"}
@@ -902,7 +904,9 @@ export default function Tables() {
                               {customer.isMainCustomer && ` ${t("mainContact", "Main")}`}
                               {customer.paymentStatus === 'paid' && " ✓"}
                             </Badge>
-                          ))}
+                          )) || (
+                            <span className="text-xs text-gray-500">{t("noCustomerInfo", "No customer information available")}</span>
+                          )}
                         </div>
                       </div>
                     </CardContent>

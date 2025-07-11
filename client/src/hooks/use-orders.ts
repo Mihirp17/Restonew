@@ -45,7 +45,12 @@ export interface NewOrder extends Omit<Order, 'id' | 'createdAt' | 'updatedAt' |
   items: NewOrderItem[];
 }
 
-export function useOrders(restaurantId?: number | null) {
+export interface UseOrdersOptions {
+  lightweight?: boolean;
+  limit?: number;
+}
+
+export function useOrders(restaurantId?: number | null, options?: UseOrdersOptions) {
   const queryClient = useQueryClient();
   const [orders, setOrders] = useState<any[]>([]);
   const [pendingOrders, setPendingOrders] = useState<any[]>([]);
@@ -173,6 +178,39 @@ export function useOrders(restaurantId?: number | null) {
       });
     }
   });
+
+  // Delete order mutation (placeholder for now)
+  const { mutate: deleteOrder } = useMutation({
+    mutationFn: async (orderId: number) => {
+      if (!restaurantId) throw new Error('Restaurant ID is required');
+      return apiRequest({
+        method: 'DELETE',
+        url: `/api/restaurants/${restaurantId}/orders/${orderId}`
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: [`/api/restaurants/${restaurantId}/orders`]
+      });
+    }
+  });
+
+  // Edit order mutation (placeholder for now)
+  const { mutate: editOrder } = useMutation({
+    mutationFn: async ({ orderId, ...updateData }: { orderId: number; [key: string]: any }) => {
+      if (!restaurantId) throw new Error('Restaurant ID is required');
+      return apiRequest({
+        method: 'PUT',
+        url: `/api/restaurants/${restaurantId}/orders/${orderId}`,
+        data: updateData
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: [`/api/restaurants/${restaurantId}/orders`]
+      });
+    }
+  });
   
   // Get orders by table session ID
   const getOrdersByTableSessionId = useCallback(async (tableSessionId: number) => {
@@ -215,6 +253,7 @@ export function useOrders(restaurantId?: number | null) {
 
   return {
     orders,
+    activeOrders: [...pendingOrders, ...confirmedOrders, ...preparingOrders, ...servedOrders],
     pendingOrders,
     confirmedOrders,
     preparingOrders,
@@ -222,8 +261,14 @@ export function useOrders(restaurantId?: number | null) {
     completedOrders,
     cancelledOrders,
     ordersLoading,
+    isLoading: ordersLoading,
     updateOrderStatus,
     createOrder,
+    isCreating: false, // Add for compatibility
+    editOrder,
+    deleteOrder,
+    isEditing: false, // Add placeholder
+    isDeleting: false, // Add placeholder
     stats,
     getOrdersByTableSessionId,
     refetch
@@ -232,10 +277,10 @@ export function useOrders(restaurantId?: number | null) {
 
 // Hook to fetch a single order
 export function useOrder(restaurantId: number, orderId: number) {
-  const { orders, isLoading } = useOrders(restaurantId);
+  const { orders, ordersLoading } = useOrders(restaurantId);
   
   return {
-    order: orders.find(order => order.id === orderId),
-    isLoading
+    order: orders.find((order: any) => order.id === orderId),
+    isLoading: ordersLoading
   };
 }

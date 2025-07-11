@@ -131,7 +131,7 @@ export const connectWebSocket = (restaurantId?: number, tableId?: number) => {
         console.log('[WebSocket] Message received:', message.type);
         
         // For backward compatibility with older server responses
-        const payload = message.payload || message.data;
+        const payload = message.payload || (message as any).data;
         
         // Trigger event listeners for this message type
         triggerEvent(message.type, payload);

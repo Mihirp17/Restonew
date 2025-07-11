@@ -21,7 +21,6 @@ import AdminDashboard from "@/pages/admin-dashboard";
 import AdminRestaurants from "@/pages/admin-restaurants";
 import AdminSubscriptions from "@/pages/admin-subscriptions";
 import AdminSettings from "@/pages/admin-settings";
-import CustomerMenu from "@/pages/customer-menu";
 import Landing from "@/pages/landing";
 
 function Router() {
@@ -45,9 +44,6 @@ function Router() {
       <Route path="/admin/restaurants" component={AdminRestaurants} />
       <Route path="/admin/subscriptions" component={AdminSubscriptions} />
       <Route path="/admin/settings" component={AdminSettings} />
-      
-      {/* Customer-facing Routes */}
-      <Route path="/menu/:restaurantId/:tableId" component={CustomerMenu} />
       
       {/* Default Route */}
       <Route path="/" component={Landing} />

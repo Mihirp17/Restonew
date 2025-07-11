@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from './use-auth';
-import { connectWebSocket, disconnectWebSocket, addEventListener, isConnected } from '@/lib/socket';
+import { connectWebSocket, disconnectWebSocket, addEventListener, removeEventListener, sendMessage, isConnected } from '@/lib/socket';
 
 export function useSocket(restaurantId?: number | null) {
   const [isSocketConnected, setIsSocketConnected] = useState(false);
@@ -45,12 +45,12 @@ export function useSocket(restaurantId?: number | null) {
       setIsSocketConnected(false);
     });
     
-    const unsubscribeError = addEventListener('connection-failed', (error) => {
+    const unsubscribeError = addEventListener('connection-failed', (error: any) => {
       console.error('[useSocket] WebSocket connection failed:', error);
       setIsSocketConnected(false);
     });
     
-    const unsubscribeNewOrder = addEventListener('new-order-received', (data) => {
+    const unsubscribeNewOrder = addEventListener('new-order-received', (data: any) => {
       setLastMessage({ type: 'new-order-received', data });
       // Invalidate orders query
       queryClient.invalidateQueries({
@@ -69,7 +69,7 @@ export function useSocket(restaurantId?: number | null) {
       });
     });
     
-    const unsubscribeTableStatus = addEventListener('table-status-changed', (data) => {
+    const unsubscribeTableStatus = addEventListener('table-status-changed', (data: any) => {
       setLastMessage({ type: 'table-status-changed', data });
       // Invalidate tables query
       queryClient.invalidateQueries({
@@ -77,7 +77,7 @@ export function useSocket(restaurantId?: number | null) {
       });
     });
     
-    const unsubscribeSessionTotals = addEventListener('session-totals-updated', (data) => {
+    const unsubscribeSessionTotals = addEventListener('session-totals-updated', (data: any) => {
       setLastMessage({ type: 'session-totals-updated', data });
       // Invalidate table sessions query and specific session if applicable
       queryClient.invalidateQueries({
@@ -91,7 +91,7 @@ export function useSocket(restaurantId?: number | null) {
       }
     });
     
-    const unsubscribeOrderStatus = addEventListener('order-status-updated', (data) => {
+    const unsubscribeOrderStatus = addEventListener('order-status-updated', (data: any) => {
       setLastMessage({ type: 'order-status-updated', data });
       // Invalidate orders query
       queryClient.invalidateQueries({
@@ -131,6 +131,8 @@ export function useSocket(restaurantId?: number | null) {
   return { 
     isConnected: isSocketConnected, 
     lastMessage,
-    addEventListener: restaurantId && restaurantId > 0 ? addEventListener : () => () => {} // Return no-op unsubscribe function if not connected
+    addEventListener: restaurantId && restaurantId > 0 ? addEventListener : () => () => {}, // Return no-op unsubscribe function if not connected
+    removeEventListener: restaurantId && restaurantId > 0 ? removeEventListener : () => {},
+    sendMessage: restaurantId && restaurantId > 0 ? sendMessage : () => {}
   };
 }

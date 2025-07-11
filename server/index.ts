@@ -3,9 +3,15 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes.js";
 import { setupVite, serveStatic, log } from "./vite.js";
 import path from "path";
+import { fileURLToPath } from "url";
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import cors from 'cors';
+import { createProxyMiddleware } from 'http-proxy-middleware';
+import fs from 'fs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Debug logs to check environment variables
 console.log("Starting server initialization...");
@@ -134,6 +140,43 @@ const validateRequest = (req: Request, res: Response, next: NextFunction) => {
   next();
 };
 app.use('/api/', validateRequest);
+
+// Proxy /menu/* to the Vite dev server for restaurant-menu in development
+if (process.env.NODE_ENV === "development") {
+  // In development, always serve static files for reliability
+  const menuDistPath = path.join(__dirname, "../restaurant-menu/dist");
+  
+  if (fs.existsSync(menuDistPath)) {
+    // Serve static assets from the 'dist' directory, but mount them on the /menu path
+    app.use('/menu', express.static(menuDistPath));
+    
+    // Fallback for client-side routing within the menu app
+    app.get('/menu/*', (req, res) => {
+      res.sendFile(path.join(menuDistPath, 'index.html'));
+    });
+    
+    console.log('Restaurant menu: Serving built files in development mode');
+    console.log('  - To see changes, run "npm run build:menu" after editing files');
+    console.log('  - Or use "npm run dev:menu" for hot reload on http://localhost:5173');
+  } else {
+    console.warn('Restaurant menu dist folder not found. Run "npm run build:menu" to build it.');
+    console.warn('  - This will create the static files needed for /menu/* routes');
+  }
+} else {
+  // Production: Serve static files for restaurant-menu
+  const menuDistPath = path.join(__dirname, "../restaurant-menu/dist");
+  if (fs.existsSync(menuDistPath)) {
+    // Serve static assets from the 'dist' directory, but mount them on the /menu path
+    app.use('/menu', express.static(menuDistPath));
+    
+    // For client-side routing: serve index.html for any /menu/* route not matched by a static file
+    app.get('/menu/*', (req, res) => {
+      res.sendFile(path.join(menuDistPath, 'index.html'));
+    });
+  } else {
+    console.warn('Restaurant menu dist folder not found. Run "npm run build:menu" to build it.');
+  }
+}
 
 (async () => {
   try {

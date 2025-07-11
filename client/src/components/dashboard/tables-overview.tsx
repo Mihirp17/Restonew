@@ -1,309 +1,377 @@
-import { useTables } from "@/hooks/use-tables";
+import React, { useState, useEffect } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Link } from "wouter";
-import { useEffect, memo, useMemo, useCallback, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { Table as TableType } from "@shared/schema";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { apiRequest } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/contexts/language-context";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { apiRequest } from '@/lib/api';
-import { formatCurrency } from '@/lib/utils';
-import { useOrders } from '@/hooks/use-orders';
 
-interface TablesOverviewProps {
-  restaurantId?: number;
-  activeSessions?: any[];
-  onStartSession?: (tableId: number, tableNumber: number) => void;
-  onViewSession?: (sessionId: number, tableNumber: number) => void;
-  onEndSession?: (sessionId: number) => void;
-  showActions?: boolean;
+interface TableSession {
+  id: number;
+  tableId: number;
+  tableNumber: number;
+  tableCapacity: number;
+  partySize: number;
+  status: 'waiting' | 'active' | 'bill_requested' | 'completed';
+  startTime: string;
+  firstOrderTime?: string;
+  totalAmount: string;
+  paidAmount: string;
+  customers?: Array<{
+    id: number;
+    name: string;
+    isMainCustomer: boolean;
+  }>;
 }
 
-// Memoized table component to prevent unnecessary re-renders
-const TableCard = memo(({ 
-  table, 
-  onToggleOccupied, 
-  t 
-}: { 
-  table: TableType;
-  onToggleOccupied: (tableId: number, isOccupied: boolean) => void; 
-  t: any;
-}) => {
-  const handleClick = useCallback(() => {
-    onToggleOccupied(table.id, table.isOccupied);
-  }, [table.id, table.isOccupied, onToggleOccupied]);
+interface Table {
+  id: number;
+  number: number;
+  capacity: number;
+  isOccupied: boolean;
+  qrCode: string;
+}
 
-  const { cardClassName, textClassName, statusText } = useMemo(() => ({
-    cardClassName: `rounded-lg p-3 text-center cursor-pointer transition-colors duration-200 ${
-      table.isOccupied
-        ? "bg-red-100 dark:bg-red-900/30"
-        : "bg-gray-100 dark:bg-gray-700"
-    }`,
-    textClassName: `font-medium ${
-      table.isOccupied
-        ? "text-brand"
-        : "text-gray-700 dark:text-gray-300"
-    }`,
-    statusText: table.isOccupied ? t("occupied", "Occupied") : t("free", "Free")
-  }), [table.isOccupied, t]);
+interface TablesOverviewProps {
+  restaurantId: number;
+}
 
-  return (
-    <div className={cardClassName} onClick={handleClick}>
-      <p className={textClassName}>
-        Table {table.number}
-      </p>
-      <p className="text-xs text-gray-600 dark:text-gray-400">
-        {statusText}
-      </p>
-    </div>
-  );
-});
-
-TableCard.displayName = 'TableCard';
-
-export function TablesOverview({ 
-  restaurantId,
-  activeSessions = [],
-  onStartSession,
-  onViewSession,
-  onEndSession,
-  showActions = true 
-}: TablesOverviewProps) {
-  const queryClient = useQueryClient();
-  const { tables = [], isLoading, updateTable } = useTables(restaurantId || 0);
+export function TablesOverview({ restaurantId }: TablesOverviewProps) {
   const { t } = useLang();
-  const [sessionOrderTotals, setSessionOrderTotals] = useState<Record<number, string>>({});
-  const { getOrdersByTableSessionId } = useOrders(restaurantId);
+  const { toast } = useToast();
+  const [tables, setTables] = useState<Table[]>([]);
+  const [activeSessions, setActiveSessions] = useState<TableSession[]>([]);
+  const [selectedSession, setSelectedSession] = useState<TableSession | null>(null);
+  const [isSessionDialogOpen, setIsSessionDialogOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Toggle table occupancy status
-  const handleToggleOccupied = useCallback(async (tableId: number, isOccupied: boolean) => {
-    await updateTable({ tableId, data: { isOccupied: !isOccupied } });
-  }, [updateTable]);
+  const fetchTablesAndSessions = async () => {
+    try {
+      setIsLoading(true);
+      
+      // Fetch tables and active sessions in parallel
+      const [tablesResponse, sessionsResponse] = await Promise.all([
+        apiRequest({ method: 'GET', url: `/api/restaurants/${restaurantId}/tables` }),
+        apiRequest({ method: 'GET', url: `/api/restaurants/${restaurantId}/table-sessions?status=active,waiting,bill_requested` })
+      ]);
+      
+      setTables(tablesResponse || []);
+      setActiveSessions(sessionsResponse || []);
+    } catch (error) {
+      console.error('Error fetching tables and sessions:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load tables data",
+        variant: "destructive"
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (restaurantId) {
-      queryClient.invalidateQueries({ queryKey: [`/api/restaurants/${restaurantId}/tables`] });
+      fetchTablesAndSessions();
+      // Refresh every 30 seconds
+      const interval = setInterval(fetchTablesAndSessions, 30000);
+      return () => clearInterval(interval);
     }
-  }, [restaurantId, queryClient]);
+  }, [restaurantId]);
 
-  // Calculate order totals for sessions with zero totalAmount
-  useEffect(() => {
-    const fetchSessionOrderTotals = async () => {
-      const totals: Record<number, string> = {};
-      
-      if (!activeSessions || activeSessions.length === 0) return;
-      
-      for (const session of activeSessions) {
-        // Only calculate if totalAmount is 0 or very small (likely default value)
-        if (parseFloat(session.totalAmount) < 0.01) {
-          try {
-            const sessionOrders = await getOrdersByTableSessionId(session.id);
-            const orderTotal = sessionOrders.reduce(
-              (sum, order) => sum + parseFloat(order.total), 0
-            );
-            
-            if (orderTotal > 0) {
-              totals[session.id] = orderTotal.toFixed(2);
-            }
-          } catch (error) {
-            console.error(`Error fetching orders for session ${session.id}:`, error);
-          }
-        }
-      }
-      
-      setSessionOrderTotals(totals);
-    };
-    
-    fetchSessionOrderTotals();
-  }, [activeSessions, getOrdersByTableSessionId]);
-
-  // Get the effective total amount for a session (from DB or calculated)
-  const getEffectiveTotalAmount = (session: any) => {
-    if (parseFloat(session.totalAmount) >= 0.01) {
-      return session.totalAmount;
-    }
-    
-    return sessionOrderTotals[session.id] || "0.00";
+  const getTableSession = (tableNumber: number): TableSession | undefined => {
+    return activeSessions.find((session: TableSession) => session.tableNumber === tableNumber);
   };
 
-  // Calculate time elapsed since session start
-  const getSessionDuration = (startTime: string) => {
+  const getSessionDuration = (startTime: string): string => {
+    const now = new Date();
     const start = new Date(startTime);
-    const now = new Date();
-    const diffMs = now.getTime() - start.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
+    const diffMinutes = Math.floor((now.getTime() - start.getTime()) / (1000 * 60));
     
-    if (diffMins < 60) {
-      return `${diffMins}m`;
+    if (diffMinutes < 60) {
+      return `${diffMinutes}m`;
     } else {
-      const hours = Math.floor(diffMins / 60);
-      const mins = diffMins % 60;
-      return `${hours}h ${mins}m`;
+      const hours = Math.floor(diffMinutes / 60);
+      const minutes = diffMinutes % 60;
+      return `${hours}h ${minutes}m`;
     }
   };
 
-  // Check if a session is at risk (waiting for >15 min or active for >2h)
-  const isSessionAtRisk = (session: any) => {
-    const start = new Date(session.startTime);
-    const now = new Date();
-    const diffMs = now.getTime() - start.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    
-    if (session.status === 'waiting' && diffMins > 15) {
-      return true;
+  const getStatusBadge = (session?: TableSession) => {
+    if (!session) {
+      return <Badge className="bg-gray-100 text-gray-700">Free</Badge>;
     }
+
+    const duration = getSessionDuration(session.startTime);
+    const isAtRisk = session.status === 'waiting' && getSessionDuration(session.startTime).includes('h');
     
-    if (session.status === 'active' && diffMins > 120) {
-      return true;
+    switch (session.status) {
+      case 'waiting':
+        return (
+          <div className="flex flex-col gap-1">
+            <Badge className={`${isAtRisk ? 'border-orange-400 text-orange-700 bg-orange-50' : 'border-blue-400 text-blue-700 bg-blue-50'} border`}>
+              {isAtRisk ? '⚠️ At Risk' : '👀 Browsing'}
+            </Badge>
+            <span className="text-xs text-gray-500">{duration}</span>
+          </div>
+        );
+      case 'active':
+        return (
+          <div className="flex flex-col gap-1">
+            <Badge className="bg-green-600 text-white">✓ Ordered</Badge>
+            <span className="text-xs text-gray-500">{duration}</span>
+          </div>
+        );
+      case 'bill_requested':
+        return (
+          <div className="flex flex-col gap-1">
+            <Badge className="border-purple-400 text-purple-700 bg-purple-50 border">💳 Bill Requested</Badge>
+            <span className="text-xs text-gray-500">{duration}</span>
+          </div>
+        );
+      default:
+        return <Badge>Unknown</Badge>;
     }
-    
-    return false;
   };
 
-  // Memoize loading skeleton
-  const loadingSkeleton = useMemo(() => (
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow">
-        <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-          <h3 className="text-lg font-medium text-gray-900 dark:text-white">{t("tablesOverview", "Tables Overview")}</h3>
-          <div className="animate-pulse w-16 h-5 bg-gray-200 dark:bg-gray-700 rounded"></div>
-        </div>
-        <div className="p-5 grid grid-cols-3 sm:grid-cols-4 gap-4">
-          {[...Array(8)].map((_, index) => (
-            <div key={index} className="animate-pulse bg-gray-200 dark:bg-gray-700 rounded-lg p-3 text-center">
-              <div className="h-5 bg-gray-300 dark:bg-gray-600 rounded mb-2"></div>
-              <div className="h-4 bg-gray-300 dark:bg-gray-600 rounded w-3/4 mx-auto"></div>
-            </div>
-          ))}
-        </div>
-      </div>
-  ), [t]);
-
-  // Memoize empty state
-  const emptyState = useMemo(() => (
-    <div className="col-span-4 text-center py-8">
-      <p className="text-gray-500 dark:text-gray-400">{t("noTablesFound", "No tables found")}</p>
-      <Link href="/tables">
-        <Button variant="link" className="mt-2 text-brand">
-          {t("addTables", "Add tables")}
-        </Button>
-      </Link>
-    </div>
-  ), [t]);
-
-  // If we're showing tables overview
-  if (!activeSessions || activeSessions.length === 0) {
-    if (isLoading) {
-      return loadingSkeleton;
+  const handleSessionAction = async (session: TableSession, action: 'assist' | 'bill' | 'complete') => {
+    try {
+      let endpoint = '';
+      let data = {};
+      
+      switch (action) {
+        case 'assist':
+          toast({
+            title: "Assistance Noted",
+            description: `Staff will check on Table ${session.tableNumber}`,
+          });
+          return;
+          
+        case 'bill':
+          setSelectedSession(session);
+          setIsSessionDialogOpen(true);
+          return;
+          
+        case 'complete':
+          endpoint = `/api/restaurants/${restaurantId}/table-sessions/${session.id}`;
+          data = { status: 'completed', endTime: new Date() };
+          
+          await apiRequest({
+            method: 'PUT',
+            url: endpoint,
+            data
+          });
+          
+          // Mark table as free
+          await apiRequest({
+            method: 'PUT',
+            url: `/api/restaurants/${restaurantId}/tables/${session.tableId}`,
+            data: { isOccupied: false }
+          });
+          
+          toast({
+            title: "Session Completed",
+            description: `Table ${session.tableNumber} is now available`,
+          });
+          
+          fetchTablesAndSessions();
+          break;
+      }
+    } catch (error) {
+      console.error(`Error performing ${action}:`, error);
+      toast({
+        title: "Error",
+        description: `Failed to ${action}. Please try again.`,
+        variant: "destructive"
+      });
     }
+  };
 
+  const renderTableCard = (table: Table) => {
+    const session = getTableSession(table.number);
+    const isOccupied = session !== undefined;
+    
     return (
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow">
-        <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-          <h3 className="text-lg font-medium text-gray-900 dark:text-white">{t("tablesOverview", "Tables Overview")}</h3>
-          <Link href="/tables">
-            <Button variant="link" className="text-sm text-brand hover:text-red-800 dark:hover:text-red-400 font-medium">
-              {t("manage", "Manage")}
-            </Button>
-          </Link>
-        </div>
-        <div className="p-5 grid grid-cols-3 sm:grid-cols-4 gap-4">
-          {tables && tables.length > 0 ? (
-            tables.map((table) => (
-              <TableCard 
-                key={table.id}
-                table={table as any} 
-                onToggleOccupied={handleToggleOccupied} 
-                t={t} 
-              />
-            ))
-          ) : (
-            emptyState
+      <Card key={table.id} className={`cursor-pointer transition-all hover:shadow-md ${
+        isOccupied ? 'border-l-4 border-l-blue-500' : 'border-l-4 border-l-gray-200'
+      }`}>
+        <CardContent className="p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <h3 className="font-semibold text-lg">Table {table.number}</h3>
+              <span className="text-sm text-gray-500">({table.capacity} seats)</span>
+            </div>
+            {getStatusBadge(session)}
+          </div>
+          
+          {session && (
+            <div className="space-y-2">
+              <div className="text-sm text-gray-600">
+                <div>Party: {session.partySize} {session.partySize === 1 ? 'guest' : 'guests'}</div>
+                {session.customers && session.customers.length > 0 && (
+                  <div>Main: {session.customers.find(c => c.isMainCustomer)?.name || 'Anonymous'}</div>
+                )}
+                {session.status === 'active' && (
+                  <div>Total: ${parseFloat(session.totalAmount).toFixed(2)}</div>
+                )}
+              </div>
+              
+              <div className="flex gap-2 mt-3">
+                {session.status === 'waiting' && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleSessionAction(session, 'assist')}
+                    className="text-xs"
+                  >
+                    👋 Assist
+                  </Button>
+                )}
+                
+                {session.status === 'active' && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleSessionAction(session, 'bill')}
+                      className="text-xs"
+                    >
+                      💳 Bill
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleSessionAction(session, 'complete')}
+                      className="text-xs"
+                    >
+                      ✓ Complete
+                    </Button>
+                  </>
+                )}
+                
+                {session.status === 'bill_requested' && (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={() => handleSessionAction(session, 'complete')}
+                    className="text-xs bg-purple-600 hover:bg-purple-700"
+                  >
+                    ✓ Process Payment
+                  </Button>
+                )}
+              </div>
+            </div>
           )}
-        </div>
-      </div>
+          
+          {!session && (
+            <div className="text-sm text-gray-500">
+              Available for new customers
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    );
+  };
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <span className="material-icons">table_restaurant</span>
+            {t("tablesOverview", "Tables Overview")}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-center h-32">
+            <div className="animate-spin w-6 h-6 border-2 border-gray-300 border-t-red-600 rounded-full"></div>
+          </div>
+        </CardContent>
+      </Card>
     );
   }
 
-  // If we're showing active sessions
+  const occupiedCount = activeSessions.length;
+  const atRiskCount = activeSessions.filter(s => 
+    s.status === 'waiting' && getSessionDuration(s.startTime).includes('h')
+  ).length;
+
   return (
-    <Card className="w-full">
-      <CardHeader>
-        <CardTitle>Active Tables</CardTitle>
-        <CardDescription>Currently active and waiting tables</CardDescription>
-      </CardHeader>
-      <CardContent>
-        {activeSessions.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground">
-            No active tables at the moment
-          </div>
-        ) : (
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="material-icons">table_restaurant</span>
+              {t("tablesOverview", "Tables Overview")}
+            </div>
+            <div className="flex gap-2">
+              <Badge variant="outline" className="text-sm">
+                {occupiedCount}/{tables.length} occupied
+              </Badge>
+              {atRiskCount > 0 && (
+                <Badge variant="outline" className="text-sm border-orange-400 text-orange-700">
+                  {atRiskCount} at risk
+                </Badge>
+              )}
+            </div>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {activeSessions.map((session) => (
-              <Card key={session.id} className="overflow-hidden">
-                <div className="bg-primary p-4 text-primary-foreground flex justify-between items-center">
-                  <div>
-                    <h3 className="font-bold text-lg">Table {session.table?.number}</h3>
-                    <p className="text-sm opacity-90">
-                      {session.partySize} {session.partySize === 1 ? 'guest' : 'guests'} • {getSessionDuration(session.startTime)}
-                    </p>
-                  </div>
-                  <div>
-                    <Badge variant={session.status === 'waiting' ? 'secondary' : 'outline'}>
-                      {session.status === 'waiting' ? 'Waiting' : 'Active'}
-                    </Badge>
-                    {isSessionAtRisk(session) && (
-                      <Badge variant="destructive" className="ml-2">At Risk</Badge>
-                    )}
-                  </div>
-                </div>
-                <div className="p-4">
-                  <div className="flex justify-between items-center mb-4">
-                    <div>
-                      <p className="text-sm text-muted-foreground">Bill</p>
-                      <p className="font-semibold">
-                        {formatCurrency(getEffectiveTotalAmount(session))}
-                        {parseFloat(session.totalAmount) < 0.01 && parseFloat(sessionOrderTotals[session.id] || "0") > 0 && (
-                          <span className="text-xs text-muted-foreground ml-1">(calculated)</span>
-                        )}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-muted-foreground">Paid</p>
-                      <p className="font-semibold">{formatCurrency(session.paidAmount)}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-muted-foreground">Remaining</p>
-                      <p className="font-semibold">
-                        {formatCurrency((parseFloat(getEffectiveTotalAmount(session)) - parseFloat(session.paidAmount)).toFixed(2))}
-                      </p>
-                    </div>
-                  </div>
-                  
-                  {showActions && (
-                    <div className="flex justify-end space-x-2">
-                      <Button 
-                        variant="outline" 
-                        size="sm"
-                        onClick={() => onViewSession?.(session.id, session.table?.number)}
-                      >
-                        View
-                      </Button>
-                      <Button 
-                        variant="destructive" 
-                        size="sm"
-                        onClick={() => onEndSession?.(session.id)}
-                      >
-                        End Session
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              </Card>
-            ))}
+            {tables.map(renderTableCard)}
           </div>
-        )}
-      </CardContent>
-    </Card>
+          
+          {tables.length === 0 && (
+            <div className="text-center py-8 text-gray-500">
+              <span className="material-icons text-4xl mb-2 block">table_restaurant</span>
+              <p>No tables configured yet</p>
+              <Button variant="outline" className="mt-2" onClick={() => window.location.href = '/tables'}>
+                Add Tables
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Session Details Dialog */}
+      <Dialog open={isSessionDialogOpen} onOpenChange={setIsSessionDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Table {selectedSession?.tableNumber} - Bill Options</DialogTitle>
+          </DialogHeader>
+          
+          {selectedSession && (
+            <div className="space-y-4">
+              <div className="text-sm text-gray-600">
+                <div>Party Size: {selectedSession.partySize} guests</div>
+                <div>Session Duration: {getSessionDuration(selectedSession.startTime)}</div>
+                <div>Total Amount: ${parseFloat(selectedSession.totalAmount).toFixed(2)}</div>
+              </div>
+              
+              <div className="flex flex-col gap-2">
+                <Button
+                  onClick={() => {
+                    // Navigate to bill generation page
+                    window.location.href = `/orders?sessionId=${selectedSession.id}`;
+                  }}
+                  className="w-full"
+                >
+                  Generate Bills
+                </Button>
+                
+                <Button
+                  variant="outline"
+                  onClick={() => setIsSessionDialogOpen(false)}
+                  className="w-full"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
