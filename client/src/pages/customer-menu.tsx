@@ -142,180 +142,51 @@ export default function CustomerMenu() {
     fetchRestaurantAndMenu();
   }, [restaurantId, toast]);
 
-  // Create customer and table session with debouncing
-  const createCustomerAndSession = useMemo(() => {
-    let timeoutId: NodeJS.Timeout;
-    let isProcessing = false;
-    
-    return async (): Promise<{customerId: number, tableSessionId: number} | null> => {
-      // Prevent multiple simultaneous calls
-      if (isProcessing) {
-        console.log("Session creation already in progress, skipping...");
-        return null;
+  // Create customer and table session with simplified atomic operation
+  const createCustomerAndSession = async (): Promise<{customerId: number, tableSessionId: number} | null> => {
+    try {
+      if (!customerName.trim()) {
+        throw new Error("Customer name is required");
       }
       
-      isProcessing = true;
-      
-      try {
-        if (!customerName.trim()) {
-          throw new Error("Customer name is required");
-        }
-        
-        if (!restaurantId || !tableId) {
-          throw new Error("Invalid restaurant or table ID");
-        }
+      if (!restaurantId || !tableId) {
+        throw new Error("Invalid restaurant or table ID");
+      }
 
-        // First check for existing active session for this table
-        const existingSessionResponse = await fetch(`/api/public/restaurants/${restaurantId}/table-sessions?tableId=${tableId}`, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          }
-        });
-
-        let sessionData;
-        
-        if (existingSessionResponse.ok) {
-          const existingSessions = await existingSessionResponse.json();
-          const activeSession = existingSessions.find((session: any) => 
-            session.status === 'active' || session.status === 'waiting'
-          );
-          
-          if (activeSession) {
-            // Join existing session
-            sessionData = activeSession;
-            console.log("Joining existing table session:", sessionData);
-          }
-        }
-
-        if (!sessionData) {
-          // Create new session if none exists (starts as 'waiting')
-          const sessionResponse = await fetch(`/api/public/restaurants/${restaurantId}/table-sessions`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              tableNumber: parseInt(tableId!), // Send as tableNumber since URL uses table number
-              partySize: 1,
-              status: "waiting" // Start as waiting, will become active when first order is placed
-            })
-          });
-          
-          if (!sessionResponse.ok) {
-            const errorData = await sessionResponse.json();
-            throw new Error(errorData.message || "Failed to create table session");
-          }
-
-          sessionData = await sessionResponse.json();
-          if (!sessionData || !sessionData.id) {
-            throw new Error("Invalid session data received from server");
-          }
-          console.log("Table session created:", sessionData);
-        } else {
-          // Update party size for existing session when new customer joins
-          const existingCustomers = await fetch(`/api/public/restaurants/${restaurantId}/table-sessions/${sessionData.id}/customers`, {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-            }
-          });
-          
-          if (existingCustomers.ok) {
-            const customers = await existingCustomers.json();
-            const newPartySize = customers.length + 1; // Current customers + new customer
-            
-            // Update session party size (this requires the authenticated endpoint)
-            try {
-              await fetch(`/api/restaurants/${restaurantId}/table-sessions/${sessionData.id}`, {
-                method: 'PUT',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                  partySize: newPartySize
-                }),
-                credentials: 'include'
-              });
-              console.log(`Updated session party size to ${newPartySize}`);
-            } catch (updateError) {
-              console.warn('Could not update party size:', updateError);
-              // Continue anyway - this is not critical
-            }
-          }
-        }
-
-        console.log("Table session created:", sessionData);
-      setTableSessionId(sessionData.id);
-
-        // Check if customer already exists in this session
-        const existingCustomersResponse = await fetch(`/api/public/restaurants/${restaurantId}/table-sessions/${sessionData.id}/customers`, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          }
-        });
-
-        let customerData;
-        
-        if (existingCustomersResponse.ok) {
-          const existingCustomers = await existingCustomersResponse.json();
-          const existingCustomer = existingCustomers.find((customer: any) => 
-            customer.name.toLowerCase() === customerName.trim().toLowerCase() ||
-            (customerEmail.trim() && customer.email?.toLowerCase() === customerEmail.trim().toLowerCase())
-          );
-          
-          if (existingCustomer) {
-            // Use existing customer
-            customerData = existingCustomer;
-            console.log("Using existing customer:", customerData);
-          }
-        }
-
-        if (!customerData) {
-          // Create new customer record
-      const customerResponse = await fetch(`/api/public/restaurants/${restaurantId}/customers`, {
+      // Single atomic API call to create/join session
+      const response = await fetch(`/api/public/restaurants/${restaurantId}/customer-session`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          name: customerName.trim(),
-          email: customerEmail.trim() || null,
-          phone: customerPhone.trim() || null,
-          tableSessionId: sessionData.id,
-              isMainCustomer: false  // Don't claim to be main customer when joining
+          tableNumber: parseInt(tableId!),
+          customerName: customerName.trim(),
+          customerEmail: customerEmail.trim() || null,
+          customerPhone: customerPhone.trim() || null
         })
       });
 
-      if (!customerResponse.ok) {
-        const errorData = await customerResponse.json();
-            console.error("Customer creation error:", errorData);
-        throw new Error(errorData.message || "Failed to create customer record");
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || "Failed to create session");
       }
 
-          customerData = await customerResponse.json();
-          console.log("Customer created:", customerData);
-        }
-
-        console.log("Customer created:", customerData);
-      setCustomerId(customerData.id);
+      const sessionResult = await response.json();
       
-        return {
-          customerId: customerData.id,
-          tableSessionId: sessionData.id
-        };
+      setCustomerId(sessionResult.customer.id);
+      setTableSessionId(sessionResult.session.id);
+      
+      return {
+        customerId: sessionResult.customer.id,
+        tableSessionId: sessionResult.session.id
+      };
+      
     } catch (error) {
-        console.error("Error in createCustomerAndSession:", error);
-        return null;
-      } finally {
-        // Add small delay before allowing next call
-        setTimeout(() => {
-          isProcessing = false;
-        }, 1000);
-      }
-    };
-  }, [customerName, customerEmail, customerPhone, restaurantId, tableId]);
+      console.error("Error in createCustomerAndSession:", error);
+      throw error;
+    }
+  };
 
   // Submit customer information with enhanced validation
   const submitCustomerInfo = async () => {

@@ -102,6 +102,7 @@ export interface IStorage {
   // Table Session Methods
   getTableSession(id: number): Promise<TableSession | undefined>;
   getTableSessionsByRestaurantId(restaurantId: number, status?: string): Promise<any[]>;
+  getTableSessionsByTableId(tableId: number): Promise<any[]>;
   createTableSession(session: InsertTableSession): Promise<TableSession>;
   updateTableSession(id: number, session: Partial<InsertTableSession>): Promise<TableSession | undefined>;
   
@@ -886,41 +887,52 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getTableSessionsByRestaurantId(restaurantId: number, status?: string): Promise<any[]> {
-    let sessions: TableSession[];
-    
-    if (status) {
-      sessions = await db.select().from(tableSessions).where(
-        and(
-          eq(tableSessions.restaurantId, restaurantId),
-          eq(tableSessions.status, status)
-        )
-      );
-    } else {
-      sessions = await db.select().from(tableSessions).where(eq(tableSessions.restaurantId, restaurantId));
-    }
-
-    // Enrich each session with customers, table data, and orders
-    const enrichedSessions = await Promise.all(
-      sessions.map(async (session) => {
-        // Get customers for this session
-        const customers = await this.getCustomersByTableSessionId(session.id);
-        
-        // Get table details
-        const table = await this.getTable(session.tableId);
-        
-        // Get orders for this session
-        const orders = await this.getOrdersByTableSessionId(session.id);
-        
-        return {
-          ...session,
-          customers,
-          table,
-          orders
-        };
+    try {
+      let query = db.select({
+        id: tableSessions.id,
+        restaurantId: tableSessions.restaurantId,
+        tableId: tableSessions.tableId,
+        groupId: tableSessions.groupId,
+        sessionName: tableSessions.sessionName,
+        partySize: tableSessions.partySize,
+        status: tableSessions.status,
+        startTime: tableSessions.startTime,
+        firstOrderTime: tableSessions.firstOrderTime,
+        endTime: tableSessions.endTime,
+        totalAmount: tableSessions.totalAmount,
+        paidAmount: tableSessions.paidAmount,
+        billRequested: tableSessions.billRequested,
+        billRequestedAt: tableSessions.billRequestedAt,
+        splitType: tableSessions.splitType,
+        createdAt: tableSessions.createdAt,
+        updatedAt: tableSessions.updatedAt,
+        tableNumber: tables.number,
+        tableCapacity: tables.capacity
       })
-    );
+      .from(tableSessions)
+      .leftJoin(tables, eq(tableSessions.tableId, tables.id))
+      .where(eq(tableSessions.restaurantId, restaurantId));
 
-    return enrichedSessions;
+      if (status) {
+        query = query.where(eq(tableSessions.status, status));
+      }
+
+      const result = await query.orderBy(desc(tableSessions.createdAt));
+      return result;
+    } catch (error) {
+      console.error('Error fetching table sessions:', error);
+      return [];
+    }
+  }
+
+  async getTableSessionsByTableId(tableId: number): Promise<any[]> {
+    try {
+      const result = await db.select().from(tableSessions).where(eq(tableSessions.tableId, tableId)).orderBy(desc(tableSessions.createdAt));
+      return result;
+    } catch (error) {
+      console.error('Error fetching table sessions by table ID:', error);
+      return [];
+    }
   }
 
   async createTableSession(session: InsertTableSession): Promise<TableSession> {
@@ -961,7 +973,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getCustomersByTableSessionId(tableSessionId: number): Promise<Customer[]> {
-    return await db.select().from(customers).where(eq(customers.tableSessionId, tableSessionId));
+    try {
+      const result = await db.select().from(customers).where(eq(customers.tableSessionId, tableSessionId));
+      return result;
+    } catch (error) {
+      console.error('Error fetching customers by table session:', error);
+      return [];
+    }
   }
 
   async createCustomer(customer: InsertCustomer): Promise<Customer> {
