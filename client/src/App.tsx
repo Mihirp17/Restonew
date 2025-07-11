@@ -5,6 +5,8 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/ui/theme-provider";
 import { LanguageProvider } from "@/contexts/language-context";
+import { RestaurantProvider } from "@/contexts/RestaurantContext";
+import { CartProvider } from "@/contexts/CartContext";
 import NotFound from "@/pages/not-found";
 
 // Pages
@@ -64,8 +66,12 @@ function App() {
       <LanguageProvider>
         <ThemeProvider defaultTheme="light">
           <TooltipProvider>
-            <Toaster />
-            <Router />
+            <RestaurantProvider>
+              <CartProvider>
+                <Toaster />
+                <Router />
+              </CartProvider>
+            </RestaurantProvider>
           </TooltipProvider>
         </ThemeProvider>
       </LanguageProvider>

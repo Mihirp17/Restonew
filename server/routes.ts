@@ -451,6 +451,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Public menu endpoint with categories for customer menu
+  app.get('/api/public/restaurants/:restaurantId/menu-items', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      // Get menu items and group them by category
+      const menuItems = await storage.getMenuItems(restaurantId);
+      
+      // Group items by category (assuming category is a string field)
+      const categoryMap = new Map<string, any[]>();
+      menuItems.forEach(item => {
+        const category = item.category || 'Uncategorized';
+        if (!categoryMap.has(category)) {
+          categoryMap.set(category, []);
+        }
+        categoryMap.get(category)!.push(item);
+      });
+
+      // Convert to array format with category objects
+      const categories = Array.from(categoryMap.entries()).map(([name, items], index) => ({
+        id: index + 1,
+        name,
+        items
+      }));
+
+      return res.json({
+        categories,
+        allItems: menuItems
+      });
+    } catch (error) {
+      console.error('Error fetching menu items:', error);
+      return res.status(500).json({ message: 'Failed to fetch menu items' });
+    }
+  });
+
   // Public restaurant endpoint for customer menu
   app.get('/api/public/restaurants/:restaurantId', async (req, res) => {
     try {
