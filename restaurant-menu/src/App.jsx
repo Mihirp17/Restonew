@@ -5,23 +5,29 @@ import MenuItemCard from "./components/MenuItemCard";
 import CategoryTabs from "./components/CategoryTabs";
 import OrderPlacedBill from "./components/OrderPlacedBill";
 
-function Landing() {
+function QRMessage() {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center text-center px-4">
+      <h1 className="text-2xl font-bold mb-4 text-red-600">Scan the QR code on your table to start ordering.</h1>
+      <p className="text-gray-600">This page is only accessible via the QR code provided at your restaurant table.</p>
+    </div>
+  );
+}
+
+function CustomerLanding({ onSubmit }) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
-  const [restaurantId, setRestaurantId] = useState("");
-  const [tableId, setTableId] = useState("");
-  const navigate = useNavigate();
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!name.trim() || !phone.trim() || !restaurantId.trim() || !tableId.trim()) {
-      setError("All fields are required");
+    if (!name.trim() || !phone.trim()) {
+      setError("Name and phone are required");
       return;
     }
     setError("");
-    navigate(`/menu/${restaurantId}/${tableId}`, { state: { name, phone, email } });
+    onSubmit({ name, phone, email });
   };
 
   return (
@@ -29,20 +35,6 @@ function Landing() {
       <div className="w-full max-w-xs">
         <h1 className="text-3xl font-bold text-center mb-6 text-red-600">Welcome!</h1>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <input
-            className="w-full px-4 py-3 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-400 outline-none"
-            placeholder="Restaurant ID*"
-            value={restaurantId}
-            onChange={e => setRestaurantId(e.target.value)}
-            required
-          />
-          <input
-            className="w-full px-4 py-3 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-400 outline-none"
-            placeholder="Table ID*"
-            value={tableId}
-            onChange={e => setTableId(e.target.value)}
-            required
-          />
           <input
             className="w-full px-4 py-3 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-400 outline-none"
             placeholder="Your Name*"
@@ -79,8 +71,7 @@ function Landing() {
 
 function MenuUI() {
   const { restaurantId, tableId } = useParams();
-  const location = useLocation();
-  const userInfo = location.state || {};
+  const [userInfo, setUserInfo] = useState(null);
   const [customerId, setCustomerId] = useState(null);
   const [tableSessionId, setTableSessionId] = useState(null);
   const [menu, setMenu] = useState([]);
@@ -89,11 +80,13 @@ function MenuUI() {
   const [cart, setCart] = useState([]);
   const [showCart, setShowCart] = useState(false);
   const [orderPlaced, setOrderPlaced] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [step, setStep] = useState("landing"); // landing or menu
 
-  // Create session and fetch menu
+  // After user info is submitted, create session and fetch menu
   useEffect(() => {
+    if (!userInfo) return;
     async function createSessionAndFetchMenu() {
       setLoading(true);
       setError("");
@@ -122,6 +115,7 @@ function MenuUI() {
         const cats = [...new Set(menuData.map(item => item.category || "Uncategorized"))];
         setCategories(cats);
         setCategory(cats[0] || "");
+        setStep("menu");
       } catch (err) {
         setError(err.message || "Unknown error");
       } finally {
@@ -129,8 +123,7 @@ function MenuUI() {
       }
     }
     createSessionAndFetchMenu();
-    // eslint-disable-next-line
-  }, [restaurantId, tableId]);
+  }, [userInfo, restaurantId, tableId]);
 
   const filteredMenu = menu.filter((item) => item.category === category);
   const cartTotal = cart.reduce((sum, item) => sum + parseFloat(item.price) * item.qty, 0);
@@ -195,6 +188,10 @@ function MenuUI() {
   if (loading) return <div className="flex min-h-screen items-center justify-center text-lg">Loading...</div>;
   if (error) return <div className="flex min-h-screen items-center justify-center text-red-600">{error}</div>;
 
+  if (step === "landing") {
+    return <CustomerLanding onSubmit={setUserInfo} />;
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 pb-24">
       <div className="sticky top-0 z-10 bg-white py-3 shadow-sm">
@@ -239,7 +236,7 @@ function App() {
   return (
     <Routes>
       <Route path="/menu/:restaurantId/:tableId" element={<MenuUI />} />
-      <Route path="/" element={<Landing />} />
+      <Route path="/" element={<QRMessage />} />
     </Routes>
   );
 }
