@@ -1,5 +1,7 @@
 import { useState } from "react";
 import CartModal from "./components/CartModal";
+import MenuItemCard from "./components/MenuItemCard";
+import CategoryTabs from "./components/CategoryTabs";
 
 const mockCategories = ["Sushi", "Rolls", "Sashimi", "Drinks"];
 const mockMenu = [
@@ -96,34 +98,11 @@ function MenuUI({ user }) {
     <div className="min-h-screen bg-gray-50 pb-24">
       <div className="sticky top-0 z-10 bg-white py-3 shadow-sm">
         <div className="text-lg font-bold text-center text-red-600">Hi, {user.name}!</div>
-        <div className="flex gap-2 mt-2 overflow-x-auto px-2">
-          {mockCategories.map((cat) => (
-            <button
-              key={cat}
-              className={`px-4 py-2 rounded-full text-sm font-semibold border ${cat === category ? 'bg-red-600 text-white border-red-600' : 'bg-white text-red-600 border-red-200'} transition`}
-              onClick={() => setCategory(cat)}
-            >
-              {cat}
-            </button>
-          ))}
-        </div>
+        <CategoryTabs categories={mockCategories} selected={category} onSelect={setCategory} />
       </div>
       <div className="p-4 grid grid-cols-1 gap-4">
         {filteredMenu.map((item) => (
-          <div key={item.id} className="bg-white rounded-xl shadow p-4 flex items-center gap-4">
-            <img src={item.img} alt={item.name} className="w-20 h-20 object-cover rounded-lg" />
-            <div className="flex-1">
-              <div className="font-bold text-lg text-gray-900">{item.name}</div>
-              <div className="text-gray-500 text-sm mb-1">{item.desc}</div>
-              <div className="font-semibold text-red-600">${item.price.toFixed(2)}</div>
-            </div>
-            <button
-              className="bg-red-600 text-white rounded-full px-4 py-2 font-bold text-lg hover:bg-red-700 transition"
-              onClick={() => addToCart(item)}
-            >
-              +
-            </button>
-          </div>
+          <MenuItemCard key={item.id} item={item} onAdd={addToCart} />
         ))}
       </div>
       {/* Floating Cart Button */}
