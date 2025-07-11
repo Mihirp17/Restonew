@@ -1,34 +1,27 @@
-import { useState } from "react";
-import { Routes, Route, useParams, useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { Routes, Route, useParams, useNavigate, useLocation } from "react-router-dom";
 import CartModal from "./components/CartModal";
 import MenuItemCard from "./components/MenuItemCard";
 import CategoryTabs from "./components/CategoryTabs";
 import OrderPlacedBill from "./components/OrderPlacedBill";
-
-const mockCategories = ["Sushi", "Rolls", "Sashimi", "Drinks"];
-const mockMenu = [
-  { id: 1, name: "Salmon Sushi", desc: "Fresh salmon over rice", price: 4.5, img: "https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=400&q=80", category: "Sushi" },
-  { id: 2, name: "Tuna Roll", desc: "Classic tuna roll", price: 3.5, img: "https://images.unsplash.com/photo-1464306076886-debca5e8a6b0?auto=format&fit=crop&w=400&q=80", category: "Rolls" },
-  { id: 3, name: "Ebi Sashimi", desc: "Shrimp sashimi", price: 5.0, img: "https://images.unsplash.com/photo-1502741338009-cac2772e18bc?auto=format&fit=crop&w=400&q=80", category: "Sashimi" },
-  { id: 4, name: "Green Tea", desc: "Hot Japanese tea", price: 2.0, img: "https://images.unsplash.com/photo-1519864600265-abb23847ef2c?auto=format&fit=crop&w=400&q=80", category: "Drinks" },
-];
 
 function Landing() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
+  const [restaurantId, setRestaurantId] = useState("");
+  const [tableId, setTableId] = useState("");
   const navigate = useNavigate();
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!name.trim() || !phone.trim()) {
-      setError("Name and phone are required");
+    if (!name.trim() || !phone.trim() || !restaurantId.trim() || !tableId.trim()) {
+      setError("All fields are required");
       return;
     }
     setError("");
-    // For demo, use dummy restaurantId/tableId
-    navigate("/menu/1/1", { state: { name, phone, email } });
+    navigate(`/menu/${restaurantId}/${tableId}`, { state: { name, phone, email } });
   };
 
   return (
@@ -36,6 +29,20 @@ function Landing() {
       <div className="w-full max-w-xs">
         <h1 className="text-3xl font-bold text-center mb-6 text-red-600">Welcome!</h1>
         <form onSubmit={handleSubmit} className="space-y-4">
+          <input
+            className="w-full px-4 py-3 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-400 outline-none"
+            placeholder="Restaurant ID*"
+            value={restaurantId}
+            onChange={e => setRestaurantId(e.target.value)}
+            required
+          />
+          <input
+            className="w-full px-4 py-3 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-400 outline-none"
+            placeholder="Table ID*"
+            value={tableId}
+            onChange={e => setTableId(e.target.value)}
+            required
+          />
           <input
             className="w-full px-4 py-3 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-400 outline-none"
             placeholder="Your Name*"
@@ -72,13 +79,61 @@ function Landing() {
 
 function MenuUI() {
   const { restaurantId, tableId } = useParams();
-  // TODO: Use location.state for user info if needed
-  const [category, setCategory] = useState(mockCategories[0]);
+  const location = useLocation();
+  const userInfo = location.state || {};
+  const [customerId, setCustomerId] = useState(null);
+  const [tableSessionId, setTableSessionId] = useState(null);
+  const [menu, setMenu] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [category, setCategory] = useState("");
   const [cart, setCart] = useState([]);
   const [showCart, setShowCart] = useState(false);
   const [orderPlaced, setOrderPlaced] = useState(false);
-  const filteredMenu = mockMenu.filter((item) => item.category === category);
-  const cartTotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  // Create session and fetch menu
+  useEffect(() => {
+    async function createSessionAndFetchMenu() {
+      setLoading(true);
+      setError("");
+      try {
+        // 1. Create customer session
+        const sessionRes = await fetch(`/api/public/restaurants/${restaurantId}/customer-session`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tableNumber: parseInt(tableId),
+            customerName: userInfo.name,
+            customerEmail: userInfo.email || null,
+            customerPhone: userInfo.phone || null
+          })
+        });
+        if (!sessionRes.ok) throw new Error("Failed to create session");
+        const sessionData = await sessionRes.json();
+        setCustomerId(sessionData.customer.id);
+        setTableSessionId(sessionData.session.id);
+
+        // 2. Fetch menu
+        const menuRes = await fetch(`/api/public/restaurants/${restaurantId}/menu-items`);
+        if (!menuRes.ok) throw new Error("Failed to fetch menu");
+        const menuData = await menuRes.json();
+        setMenu(menuData);
+        const cats = [...new Set(menuData.map(item => item.category || "Uncategorized"))];
+        setCategories(cats);
+        setCategory(cats[0] || "");
+      } catch (err) {
+        setError(err.message || "Unknown error");
+      } finally {
+        setLoading(false);
+      }
+    }
+    createSessionAndFetchMenu();
+    // eslint-disable-next-line
+  }, [restaurantId, tableId]);
+
+  const filteredMenu = menu.filter((item) => item.category === category);
+  const cartTotal = cart.reduce((sum, item) => sum + parseFloat(item.price) * item.qty, 0);
 
   const addToCart = (item) => {
     setCart((prev) => {
@@ -94,21 +149,57 @@ function MenuUI() {
     setCart((prev) => prev.filter((i) => i.id !== id));
   };
 
-  const placeOrder = () => {
-    setOrderPlaced(true);
-    setShowCart(false);
-    setCart([]);
+  const placeOrder = async () => {
+    if (!customerId || !tableSessionId || cart.length === 0) return;
+    setLoading(true);
+    setError("");
+    try {
+      // Fetch table sessions to get the correct table DB ID
+      const sessionRes = await fetch(`/api/public/restaurants/${restaurantId}/table-sessions`);
+      if (!sessionRes.ok) throw new Error("Failed to fetch table session data");
+      const sessions = await sessionRes.json();
+      const currentSession = sessions.find((s) => s.id === tableSessionId);
+      if (!currentSession || !currentSession.tableId) throw new Error("Table session not found");
+      // Place order
+      const orderData = {
+        customerId,
+        tableSessionId,
+        orderNumber: `T${tableId.padStart(2, '0')}-${Date.now().toString().slice(-6)}`,
+        status: "pending",
+        total: cartTotal.toString(),
+        restaurantId: parseInt(restaurantId),
+        tableId: currentSession.tableId,
+        notes: "",
+        isGroupOrder: false,
+        items: cart.map(item => ({ menuItemId: item.id, quantity: item.qty, price: item.price }))
+      };
+      const orderRes = await fetch(`/api/public/restaurants/${restaurantId}/orders`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(orderData)
+      });
+      if (!orderRes.ok) throw new Error("Failed to place order");
+      setCart([]);
+      setOrderPlaced(true);
+    } catch (err) {
+      setError(err.message || "Unknown error");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleRequestBill = () => {
     alert('Waiter will come to your table with the bill!');
   };
 
+  if (loading) return <div className="flex min-h-screen items-center justify-center text-lg">Loading...</div>;
+  if (error) return <div className="flex min-h-screen items-center justify-center text-red-600">{error}</div>;
+
   return (
     <div className="min-h-screen bg-gray-50 pb-24">
       <div className="sticky top-0 z-10 bg-white py-3 shadow-sm">
         <div className="text-lg font-bold text-center text-red-600">Table {tableId} • Restaurant {restaurantId}</div>
-        <CategoryTabs categories={mockCategories} selected={category} onSelect={setCategory} />
+        <CategoryTabs categories={categories} selected={category} onSelect={setCategory} />
       </div>
       <div className="p-4 grid grid-cols-1 gap-4">
         {filteredMenu.map((item) => (
