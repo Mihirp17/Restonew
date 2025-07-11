@@ -24,12 +24,15 @@ export function useTables(restaurantId: number) {
         url: `/api/restaurants/${restaurantId}/tables`
       });
     },
-    enabled: !!restaurantId && restaurantId > 0
+    enabled: !!restaurantId && restaurantId > 0 && !isNaN(restaurantId)
   });
   
   // Create table mutation
   const createTableMutation = useMutation({
     mutationFn: async (tableData: Omit<Table, 'id' | 'createdAt' | 'updatedAt'>) => {
+      if (!restaurantId || restaurantId <= 0) {
+        throw new Error('Invalid restaurant ID');
+      }
       return apiRequest({
         method: 'POST',
         url: `/api/restaurants/${restaurantId}/tables`,
@@ -37,15 +40,20 @@ export function useTables(restaurantId: number) {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: [`/api/restaurants/${restaurantId}/tables`]
-      });
+      if (restaurantId && restaurantId > 0) {
+        queryClient.invalidateQueries({
+          queryKey: [`/api/restaurants/${restaurantId}/tables`]
+        });
+      }
     }
   });
   
   // Update table mutation
   const updateTableMutation = useMutation({
     mutationFn: async ({ tableId, data }: { tableId: number; data: Partial<Table> }) => {
+      if (!restaurantId || restaurantId <= 0) {
+        throw new Error('Invalid restaurant ID');
+      }
       return apiRequest({
         method: 'PUT',
         url: `/api/restaurants/${restaurantId}/tables/${tableId}`,
@@ -53,24 +61,31 @@ export function useTables(restaurantId: number) {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: [`/api/restaurants/${restaurantId}/tables`]
-      });
+      if (restaurantId && restaurantId > 0) {
+        queryClient.invalidateQueries({
+          queryKey: [`/api/restaurants/${restaurantId}/tables`]
+        });
+      }
     }
   });
   
   // Delete table mutation
   const deleteTableMutation = useMutation({
     mutationFn: async (tableId: number) => {
+      if (!restaurantId || restaurantId <= 0) {
+        throw new Error('Invalid restaurant ID');
+      }
       return apiRequest({
         method: 'DELETE',
         url: `/api/restaurants/${restaurantId}/tables/${tableId}`
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: [`/api/restaurants/${restaurantId}/tables`]
-      });
+      if (restaurantId && restaurantId > 0) {
+        queryClient.invalidateQueries({
+          queryKey: [`/api/restaurants/${restaurantId}/tables`]
+        });
+      }
     }
   });
   

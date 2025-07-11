@@ -114,13 +114,17 @@ export default function MenuManagement() {
 
   const onSubmit = async (data: z.infer<typeof menuItemSchema>) => {
     try {
+      console.log('Submitting menu item:', data);
+      console.log('Restaurant ID:', restaurantId);
+      console.log('User:', user);
+      
       if (editingItem) {
         // Update existing item
         await updateMenuItem({
           menuItemId: editingItem.id,
           data: {
             ...data,
-            price: data.price
+            price: parseFloat(data.price).toString()
           }
         });
         toast({
@@ -131,7 +135,7 @@ export default function MenuManagement() {
         // Create new item
         await createMenuItem({
           ...data,
-          price: data.price,
+          price: parseFloat(data.price).toString(),
           description: data.description ?? undefined,
           image: data.image || undefined
         });
@@ -142,6 +146,7 @@ export default function MenuManagement() {
       }
       setIsDialogOpen(false);
     } catch (error) {
+      console.error('Menu item submission error:', error);
       toast({
         title: "Error",
         description: "Failed to save menu item.",

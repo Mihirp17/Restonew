@@ -2,6 +2,8 @@ import { Server as HttpServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { storage } from './storage';
 import { z } from 'zod';
+import { IncomingMessage } from 'http';
+import { parse } from 'url';
 
 // Define message types with Zod schemas for validation
 const orderStatusUpdateSchema = z.object({
@@ -27,6 +29,15 @@ const waiterRequestSchema = z.object({
 const socketMessageSchema = z.object({
   type: z.string(),
   payload: z.record(z.unknown())
+});
+
+const registerRestaurantSchema = z.object({
+  restaurantId: z.number()
+});
+
+const registerTableSchema = z.object({
+  restaurantId: z.number(),
+  tableId: z.number()
 });
 
 // Define message types
@@ -57,212 +68,269 @@ export interface WaiterRequest {
 
 // Client tracking with heartbeat
 type SocketClient = {
+  id: string;
   socket: WebSocket;
-  restaurantId?: number;
+  restaurantId: number;
+  userId: number;
   tableId?: number;
   lastPing: number;
   isAlive: boolean;
 };
 
-let clients: SocketClient[] = [];
+// Global clients array - single source of truth for all client connections
+const clients: SocketClient[] = [];
 
 // Heartbeat interval in milliseconds
 const HEARTBEAT_INTERVAL = 30000;
 const HEARTBEAT_TIMEOUT = 35000;
 
-export const setupWebSocketServer = (server: HttpServer) => {
-  // Create a WebSocket server on a distinct path
-  const wss = new WebSocketServer({ 
-    server, 
-    path: '/ws',
-    perMessageDeflate: {
-      zlibDeflateOptions: {
-        chunkSize: 1024,
-        memLevel: 7,
-        level: 3
-      },
-      zlibInflateOptions: {
-        chunkSize: 10 * 1024
-      },
-      clientNoContextTakeover: true,
-      serverNoContextTakeover: true,
-      serverMaxWindowBits: 10,
-      concurrencyLimit: 10,
-      threshold: 1024
-    }
-  });
-
-  // Heartbeat interval
-  const interval = setInterval(() => {
-    wss.clients.forEach((ws: WebSocket) => {
-      const client = clients.find(c => c.socket === ws);
-      if (client) {
-        if (!client.isAlive) {
-          console.log('Client connection timed out');
-          return ws.terminate();
-        }
-        
-        client.isAlive = false;
-        ws.ping();
+export function setupWebSocketServer(server: HttpServer) {
+  const wss = new WebSocketServer({ noServer: true });
+  
+  // Set up heartbeat interval to check for stale connections
+  const heartbeatInterval = setInterval(() => {
+    const now = Date.now();
+    
+    // Check all clients for heartbeat timeout
+    clients.forEach((client, index) => {
+      // If client hasn't responded to ping within timeout, terminate connection
+      if (!client.isAlive && (now - client.lastPing) > HEARTBEAT_TIMEOUT) {
+        console.log(`WebSocket client ${client.id} timed out, closing connection`);
+        client.socket.terminate();
+        clients.splice(index, 1);
+        return;
+      }
+      
+      // Mark client as not alive until we get a pong response
+      client.isAlive = false;
+      
+      // Send ping
+      try {
+        client.socket.ping();
+      } catch (error) {
+        console.error(`Error sending ping to client ${client.id}:`, error);
+        client.socket.terminate();
+        clients.splice(index, 1);
       }
     });
   }, HEARTBEAT_INTERVAL);
-
-  wss.on('connection', (socket: WebSocket) => {
-    // Add new client to the list
-    const client: SocketClient = { 
-      socket, 
-      lastPing: Date.now(),
-      isAlive: true 
-    };
-    clients.push(client);
-
-    // Handle pong messages
-    socket.on('pong', () => {
-      const client = clients.find(c => c.socket === socket);
-      if (client) {
-        client.isAlive = true;
-        client.lastPing = Date.now();
-      }
-    });
-
-    // Handle messages from client
-    socket.on('message', async (data: string) => {
-      try {
-        // Validate message format
-        const message = socketMessageSchema.parse(JSON.parse(data));
-        
-        switch (message.type) {
-          case 'register-restaurant': {
-            // Register this connection as belonging to a restaurant
-            const restaurantId = z.number().parse(message.payload.restaurantId);
-            client.restaurantId = restaurantId;
-            console.log(`[WebSocket] Client registered for restaurant ${restaurantId}. Total restaurant clients: ${clients.filter(c => c.restaurantId === restaurantId).length}`);
-            break;
-          }
-            
-          case 'register-table': {
-            // Register this connection as belonging to a table
-            const { restaurantId, tableId } = z.object({
-              restaurantId: z.number(),
-              tableId: z.number()
-            }).parse(message.payload);
-            
-            client.restaurantId = restaurantId;
-            client.tableId = tableId;
-            break;
-          }
-            
-          case 'update-order-status': {
-            // Handle order status update
-            const updateData = orderStatusUpdateSchema.parse(message.payload);
-            
-            // Update in database
-            await storage.updateOrder(updateData.orderId, { status: updateData.status });
-            
-            // Broadcast thin patch to all clients
-            broadcastToRestaurant(updateData.restaurantId, {
-              type: 'order-patch',
-              payload: {
-                id: updateData.orderId,
-                status: updateData.status,
-                restaurantId: updateData.restaurantId
-              }
-            });
-            break;
-          }
-            
-          case 'new-order': {
-            // Handle new order creation
-            const orderData = newOrderSchema.parse(message.payload);
-            
-            // Broadcast to restaurant
-            broadcastToRestaurant(orderData.restaurantId, {
-              type: 'new-order-received',
-              payload: orderData.order
-            });
-            break;
-          }
-            
-          case 'call-waiter': {
-            // Handle waiter request
-            const waiterRequest = waiterRequestSchema.parse(message.payload);
-            
-            console.log('[WebSocket] Waiter request received:', waiterRequest);
-            console.log('[WebSocket] Connected clients:', clients.length);
-            console.log('[WebSocket] Restaurant clients:', clients.filter(c => c.restaurantId === waiterRequest.restaurantId).length);
-            
-            // If this is a bill payment request, mark the session as requesting bill
-            if (waiterRequest.requestType === 'bill-payment' && waiterRequest.tableSessionId) {
-              try {
-                await storage.updateTableSession(waiterRequest.tableSessionId, {
-                  billRequested: true,
-                  billRequestedAt: new Date()
-                });
-                console.log(`[WebSocket] Session ${waiterRequest.tableSessionId} marked as requesting bill`);
-              } catch (error) {
-                console.error('[WebSocket] Error updating session bill request status:', error);
-              }
-            }
-            
-            // Broadcast to restaurant staff
-            broadcastToRestaurant(waiterRequest.restaurantId, {
-              type: 'waiter-requested',
-              payload: waiterRequest
-            });
-            
-            console.log('[WebSocket] Waiter request broadcasted to restaurant', waiterRequest.restaurantId);
-            break;
-          }
-            
-          default:
-            console.warn('Unknown message type:', message.type);
-        }
-      } catch (error: unknown) {
-        console.error('Error handling WebSocket message:', error);
-        if (error instanceof z.ZodError) {
-          socket.send(JSON.stringify({
-            type: 'error',
-            payload: {
-              message: 'Invalid message format',
-              errors: error.errors
-            }
-          }));
-        } else {
-          socket.send(JSON.stringify({
-            type: 'error',
-            payload: {
-              message: 'Internal server error'
-            }
-          }));
-        }
-      }
-    });
-
-    // Handle client disconnection
-    socket.on('close', () => {
-      // Remove client from the list
-      clients = clients.filter(c => c.socket !== socket);
-    });
-
-    // Handle errors
-    socket.on('error', (error: Error) => {
-      console.error('WebSocket error:', error);
-      socket.close();
-    });
-  });
-
+  
   // Cleanup on server close
   wss.on('close', () => {
-    clearInterval(interval);
+    clearInterval(heartbeatInterval);
+    
+    // Close all client connections
+    clients.forEach(client => {
+      try {
+        client.socket.terminate();
+      } catch (error) {
+        console.error(`Error closing client socket ${client.id}:`, error);
+      }
+    });
+    
+    // Clear clients array
+    clients.length = 0;
   });
-
+  
+  wss.on('connection', (ws: WebSocket, req: IncomingMessage, restaurantId: number, userId: number) => {
+    const clientId = `${restaurantId}-${userId}-${Date.now()}`;
+    
+    // Create new client record
+    const client: SocketClient = {
+      id: clientId,
+      socket: ws,
+      restaurantId,
+      userId,
+      lastPing: Date.now(),
+      isAlive: true
+    };
+    
+    // Add to global clients array
+    clients.push(client);
+    
+    console.log(`WebSocket client connected: ${clientId} (Restaurant: ${restaurantId}, User: ${userId})`);
+    
+    // Handle pong messages (heartbeat response)
+    ws.on('pong', () => {
+      // Mark client as alive and update last ping time
+      const clientIndex = clients.findIndex(c => c.id === clientId);
+      if (clientIndex !== -1) {
+        clients[clientIndex].isAlive = true;
+        clients[clientIndex].lastPing = Date.now();
+      }
+    });
+    
+    ws.on('message', (message: string) => {
+      try {
+        const data = JSON.parse(message);
+        
+        // Validate message format
+        const validation = socketMessageSchema.safeParse(data);
+        if (!validation.success) {
+          console.error('Invalid message format:', validation.error);
+          return;
+        }
+        
+        handleMessage(validation.data, client);
+      } catch (error) {
+        console.error('Error handling WebSocket message:', error);
+      }
+    });
+    
+    ws.on('error', (error) => {
+      console.error(`WebSocket error for client ${clientId}:`, error);
+      
+      // Remove client from array
+      const index = clients.findIndex(c => c.id === clientId);
+      if (index !== -1) {
+        clients.splice(index, 1);
+      }
+    });
+    
+    ws.on('close', () => {
+      // Remove client from array
+      const index = clients.findIndex(c => c.id === clientId);
+      if (index !== -1) {
+        clients.splice(index, 1);
+      }
+      
+      console.log(`WebSocket client disconnected: ${clientId}`);
+    });
+    
+    // Send initial connection confirmation
+    ws.send(JSON.stringify({
+      type: 'connection-established',
+      data: { clientId, restaurantId, userId }
+    }));
+  });
+  
+  // Handle HTTP server upgrade
+  server.on('upgrade', (request, socket, head) => {
+    const { pathname, query } = parse(request.url || '', true);
+    
+    if (pathname === '/ws') {
+      const restaurantId = parseInt(query.restaurantId as string);
+      const userId = parseInt(query.userId as string);
+      
+      if (isNaN(restaurantId) || isNaN(userId)) {
+        socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request, restaurantId, userId);
+      });
+    } else {
+      socket.destroy();
+    }
+  });
+  
+  // Add method to broadcast session updates
+  (global as any).broadcastSessionUpdate = (restaurantId: number, sessionId: number, totalAmount: string, paidAmount: string) => {
+    broadcastToRestaurant(restaurantId, {
+      type: 'session-totals-updated',
+      payload: {
+        sessionId,
+        totalAmount,
+        paidAmount
+      }
+    });
+  };
+  
   return wss;
-};
+}
+
+// Handle incoming WebSocket messages
+function handleMessage(data: SocketMessage, client: SocketClient) {
+  const { type, payload } = data;
+  
+  switch (type) {
+    case 'ping':
+      client.socket.send(JSON.stringify({ type: 'pong', payload: { timestamp: Date.now() } }));
+      break;
+      
+    case 'register-restaurant':
+      try {
+        const validation = registerRestaurantSchema.safeParse(payload);
+        if (!validation.success) {
+          console.error('Invalid register-restaurant payload:', validation.error);
+          return;
+        }
+        
+        const { restaurantId } = validation.data;
+        
+        // Update client with restaurant ID
+        client.restaurantId = restaurantId;
+        
+        client.socket.send(JSON.stringify({
+          type: 'registration-confirmed',
+          payload: { restaurantId }
+        }));
+        
+        console.log(`Client ${client.id} registered for restaurant ${restaurantId}`);
+      } catch (error) {
+        console.error('Error handling register-restaurant:', error);
+      }
+      break;
+      
+    case 'register-table':
+      try {
+        const validation = registerTableSchema.safeParse(payload);
+        if (!validation.success) {
+          console.error('Invalid register-table payload:', validation.error);
+          return;
+        }
+        
+        const { restaurantId, tableId } = validation.data;
+        
+        // Update client with table ID
+        client.restaurantId = restaurantId;
+        client.tableId = tableId;
+        
+        client.socket.send(JSON.stringify({
+          type: 'table-registration-confirmed',
+          payload: { restaurantId, tableId }
+        }));
+        
+        console.log(`Client ${client.id} registered for table ${tableId} in restaurant ${restaurantId}`);
+      } catch (error) {
+        console.error('Error handling register-table:', error);
+      }
+      break;
+      
+    case 'update-order-status':
+      try {
+        const validation = orderStatusUpdateSchema.safeParse(payload);
+        if (!validation.success) {
+          console.error('Invalid update-order-status payload:', validation.error);
+          return;
+        }
+        
+        const { orderId, status, restaurantId } = validation.data;
+        
+        // Broadcast to restaurant clients
+        broadcastToRestaurant(restaurantId, {
+          type: 'order-status-updated',
+          payload: { orderId, status }
+        });
+        
+        console.log(`Order ${orderId} status updated to ${status} for restaurant ${restaurantId}`);
+      } catch (error) {
+        console.error('Error handling update-order-status:', error);
+      }
+      break;
+      
+    default:
+      console.warn(`Unknown WebSocket message type: ${type}`);
+      break;
+  }
+}
 
 // Helper function to send a message to all clients connected to a specific restaurant
-const broadcastToRestaurant = (restaurantId: number, message: SocketMessage) => {
+export const broadcastToRestaurant = (restaurantId: number, message: SocketMessage) => {
   const messageStr = JSON.stringify(message);
+  
   clients.forEach(client => {
     if (
       client.restaurantId === restaurantId && 
@@ -271,8 +339,14 @@ const broadcastToRestaurant = (restaurantId: number, message: SocketMessage) => 
       try {
         client.socket.send(messageStr);
       } catch (error: unknown) {
-        console.error('Error sending message to client:', error);
-        client.socket.close();
+        console.error(`Error sending message to client ${client.id}:`, error);
+        
+        // Close connection if sending fails
+        try {
+          client.socket.close();
+        } catch (closeError) {
+          console.error(`Error closing socket for client ${client.id}:`, closeError);
+        }
       }
     }
   });
@@ -281,6 +355,7 @@ const broadcastToRestaurant = (restaurantId: number, message: SocketMessage) => 
 // Helper function to send a message to a specific table
 export const sendToTable = (restaurantId: number, tableId: number, message: SocketMessage) => {
   const messageStr = JSON.stringify(message);
+  
   clients.forEach(client => {
     if (
       client.restaurantId === restaurantId && 
@@ -290,8 +365,14 @@ export const sendToTable = (restaurantId: number, tableId: number, message: Sock
       try {
         client.socket.send(messageStr);
       } catch (error: unknown) {
-        console.error('Error sending message to table:', error);
-        client.socket.close();
+        console.error(`Error sending message to table ${tableId} client ${client.id}:`, error);
+        
+        // Close connection if sending fails
+        try {
+          client.socket.close();
+        } catch (closeError) {
+          console.error(`Error closing socket for client ${client.id}:`, closeError);
+        }
       }
     }
   });

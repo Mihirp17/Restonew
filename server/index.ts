@@ -180,6 +180,23 @@ app.use('/api/', validateRequest);
     server.listen(port, () => {
       console.log(`Server running at http://${host}:${port}`);
       console.log("Environment: " + (process.env.NODE_ENV || "development"));
+      
+      // Start periodic cleanup of abandoned sessions (every 10 minutes)
+      console.log("Starting periodic session cleanup...");
+      setInterval(async () => {
+        try {
+          const response = await fetch(`http://${host}:${port}/api/cleanup/abandoned-sessions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          const result = await response.json();
+          if (result.cleanedCount > 0) {
+            console.log(`[Cleanup] Cleaned up ${result.cleanedCount} abandoned sessions`);
+          }
+        } catch (error) {
+          console.error('[Cleanup] Error during periodic cleanup:', error);
+        }
+      }, 10 * 60 * 1000); // Every 10 minutes
     });
   } catch (error) {
     console.error("Server startup failed with error:", error);

@@ -147,9 +147,12 @@ export default function Tables() {
           method: 'GET',
           url: `/api/restaurants/${restaurantId}/table-sessions`
         });
-        // Filter to show only active sessions in the UI
-        const activeSessions = sessions.filter((session: any) => session.status === 'active');
-        setTableSessions(activeSessions || []);
+        // Filter to show active AND waiting sessions in the UI
+        // Both states represent customers at tables who need staff attention
+        const activeAndWaitingSessions = sessions.filter((session: any) => 
+          session.status === 'active' || session.status === 'waiting'
+        );
+        setTableSessions(activeAndWaitingSessions || []);
       } catch (error) {
         console.error('Error fetching table sessions:', error);
         toast({
@@ -299,7 +302,10 @@ export default function Tables() {
           tableId: selectedTableId,
           sessionName: sessionData.sessionName,
           partySize: sessionData.partySize,
-          splitType: sessionData.splitType
+          splitType: sessionData.splitType,
+          status: 'waiting',
+          totalAmount: "0.00",
+          paidAmount: "0.00"
         }
       });
 
@@ -332,9 +338,13 @@ export default function Tables() {
 
       const updatedSessions = await apiRequest({
         method: 'GET',
-        url: `/api/restaurants/${restaurantId}/table-sessions?status=active`
+        url: `/api/restaurants/${restaurantId}/table-sessions`
       });
-      setTableSessions(updatedSessions);
+      // Filter to show active AND waiting sessions in the UI
+      const activeAndWaitingSessions = updatedSessions.filter((session: any) => 
+        session.status === 'active' || session.status === 'waiting'
+      );
+      setTableSessions(activeAndWaitingSessions);
 
       toast({
         title: "Session Started",
@@ -526,11 +536,47 @@ export default function Tables() {
   const getSessionStatusColor = (status: string) => {
     switch (status) {
       case 'active': return 'bg-green-100 text-green-800 border-green-200';
+      case 'waiting': return 'bg-blue-100 text-blue-800 border-blue-200';
       case 'requesting_bill': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
       case 'completed': return 'bg-gray-100 text-gray-800 border-gray-200';
       case 'cancelled': return 'bg-red-100 text-red-800 border-red-200';
+      case 'abandoned': return 'bg-orange-100 text-orange-800 border-orange-200';
       default: return 'bg-gray-100 text-gray-800 border-gray-200';
     }
+  };
+
+  const getSessionStatusText = (status: string) => {
+    switch (status) {
+      case 'active': return 'Active (Ordered)';
+      case 'waiting': return 'Waiting (Browsing)';
+      case 'requesting_bill': return 'Requesting Bill';
+      case 'completed': return 'Completed';
+      case 'cancelled': return 'Cancelled';
+      case 'abandoned': return 'Abandoned';
+      default: return status;
+    }
+  };
+
+  const getSessionDuration = (startTime: string) => {
+    const start = new Date(startTime);
+    const now = new Date();
+    const diffMinutes = Math.floor((now.getTime() - start.getTime()) / (1000 * 60));
+    
+    if (diffMinutes < 60) {
+      return `${diffMinutes}m`;
+    } else {
+      const hours = Math.floor(diffMinutes / 60);
+      const minutes = diffMinutes % 60;
+      return `${hours}h ${minutes}m`;
+    }
+  };
+
+  const isSessionAtRisk = (status: string, startTime: string) => {
+    if (status !== 'waiting') return false;
+    const start = new Date(startTime);
+    const now = new Date();
+    const diffMinutes = Math.floor((now.getTime() - start.getTime()) / (1000 * 60));
+    return diffMinutes > 20; // At risk if waiting for more than 20 minutes
   };
 
   const handleMarkBillAsPaid = async (billId: number) => {
@@ -580,9 +626,13 @@ export default function Tables() {
       // Refresh table sessions to reflect updated payment status
       const updatedSessions = await apiRequest({
         method: 'GET',
-        url: `/api/restaurants/${restaurantId}/table-sessions?status=active`
+        url: `/api/restaurants/${restaurantId}/table-sessions`
       });
-      setTableSessions(updatedSessions);
+      // Filter to show active AND waiting sessions in the UI
+      const activeAndWaitingSessions = updatedSessions.filter((session: any) => 
+        session.status === 'active' || session.status === 'waiting'
+      );
+      setTableSessions(activeAndWaitingSessions);
       
       // Also refresh tables query to update table occupancy status
       queryClient.invalidateQueries({
@@ -723,19 +773,46 @@ export default function Tables() {
                               {t("table", "Table")} {session.table?.number || t("unknown", "Unknown")}
                             </span>
                           </div>
-                          <Badge className={`${getSessionStatusColor(session.status)} border`}>
-                            {session.status.charAt(0).toUpperCase() + session.status.slice(1)}
-                          </Badge>
-                          {session.sessionName && (
-                            <Badge variant="outline">{session.sessionName}</Badge>
-                          )}
+                          <div className="flex items-center space-x-2">
+                            <Badge className={`${getSessionStatusColor(session.status)} border`}>
+                              {getSessionStatusText(session.status)}
+                            </Badge>
+                            {session.sessionName && (
+                              <Badge variant="outline">{session.sessionName}</Badge>
+                            )}
+                            <Badge variant="outline" className="text-xs">
+                              {getSessionDuration(session.startTime)}
+                            </Badge>
+                            {isSessionAtRisk(session.status, session.startTime) && (
+                              <Badge variant="destructive" className="text-xs animate-pulse">
+                                ⚠️ At Risk
+                              </Badge>
+                            )}
+                          </div>
                         </div>
                         <div className="flex items-center space-x-2">
+                          {session.status === 'waiting' && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                toast({
+                                  title: "Tip",
+                                  description: `Table ${session.table?.number} customers are browsing. Consider visiting them to assist with menu questions.`,
+                                });
+                              }}
+                              className="text-blue-600 border-blue-600 hover:bg-blue-50"
+                            >
+                              <Users className="h-4 w-4 mr-1" />
+                              Assist Browsing
+                            </Button>
+                          )}
                           <Button
                             size="sm"
                             variant="outline"
                             onClick={() => handleGenerateBills(session.id)}
                             className="text-green-600 border-green-600 hover:bg-green-50"
+                            disabled={session.status === 'waiting'}
                           >
                             <Receipt className="h-4 w-4 mr-1" />
                             {t("bills", "Bills")}

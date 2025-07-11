@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiRequest } from '@/lib/api';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { addEventListener, removeEventListener, sendMessage } from '@/lib/socket';
 
 export type OrderStatus = 'pending' | 'confirmed' | 'preparing' | 'served' | 'completed' | 'cancelled';
@@ -36,6 +36,7 @@ export interface LightweightOrder {
   createdAt: Date;
   customerName?: string;
   tableNumber?: number;
+  items?: OrderItem[]; // Add items for better live order display
 }
 
 export type NewOrderItem = Omit<OrderItem, 'id' | 'orderId' | 'createdAt' | 'updatedAt'>;
@@ -44,287 +45,188 @@ export interface NewOrder extends Omit<Order, 'id' | 'createdAt' | 'updatedAt' |
   items: NewOrderItem[];
 }
 
-// Hook to fetch all orders for a restaurant
-export function useOrders(restaurantId: number, options?: { lightweight?: boolean; limit?: number }) {
+export function useOrders(restaurantId?: number | null) {
   const queryClient = useQueryClient();
-  const { lightweight = false, limit = 20 } = options || {};
-  
-  // Memoize query keys to prevent unnecessary re-renders
-  const ordersQueryKey = useMemo(() => [`/api/restaurants/${restaurantId}/orders`], [restaurantId]);
-  const activeOrdersQueryKey = useMemo(() => 
-    lightweight 
-      ? [`/api/restaurants/${restaurantId}/active-orders-lightweight`, { limit }]
-      : [`/api/restaurants/${restaurantId}/active-orders`, { limit }], 
-    [restaurantId, lightweight, limit]
-  );
-  
-  // Listen for order status updates
-  useEffect(() => {
-    if (!restaurantId || restaurantId === 0) return;
-    
-    const handleOrderStatusUpdate = (data: any) => {
-      try {
-        if (data.type === 'order-patch' && data.payload.restaurantId === restaurantId) {
-          // Update only status
-          queryClient.setQueryData(activeOrdersQueryKey, (oldData: any) => {
-            if (!oldData) return oldData;
-            return oldData.map((order: any) =>
-              order.id === data.payload.id ? { ...order, status: data.payload.status } : order
-            );
-          });
-          return; // skip full update below
-        }
-        if (data.type === 'order-status-updated' && data.payload.restaurantId === restaurantId) {
-          // Update the order in the cache
-          queryClient.setQueryData(ordersQueryKey, (oldData: any) => {
-              if (!oldData) return oldData;
-              return oldData.map((order: any) => 
-                order.id === data.payload.id ? data.payload : order
-              );
-          });
+  const [orders, setOrders] = useState<any[]>([]);
+  const [pendingOrders, setPendingOrders] = useState<any[]>([]);
+  const [confirmedOrders, setConfirmedOrders] = useState<any[]>([]);
+  const [preparingOrders, setPreparingOrders] = useState<any[]>([]);
+  const [servedOrders, setServedOrders] = useState<any[]>([]);
+  const [completedOrders, setCompletedOrders] = useState<any[]>([]);
+  const [cancelledOrders, setCancelledOrders] = useState<any[]>([]);
 
-          // Update active orders if needed
-          queryClient.setQueryData(activeOrdersQueryKey, (oldData: any) => {
-              if (!oldData) return oldData;
-              // Remove from active orders if completed or cancelled
-              if (['completed', 'cancelled'].includes(data.payload.status)) {
-                return oldData.filter((order: any) => order.id !== data.payload.id);
-              }
-              // Update existing order if it exists
-              const existingOrderIndex = oldData.findIndex((order: any) => order.id === data.payload.id);
-              if (existingOrderIndex >= 0) {
-                const newData = [...oldData];
-                newData[existingOrderIndex] = data.payload;
-                return newData;
-              }
-              // Add new order if it doesn't exist
-              return [...oldData, data.payload];
-          });
-          
-          // Also invalidate queries to ensure fresh data
-          queryClient.invalidateQueries({
-            queryKey: activeOrdersQueryKey
-          });
-        }
-      } catch (error) {
-        console.error('Error handling order status update:', error);
-      }
+  // Fetch orders
+  const { data: fetchedOrders = [], isLoading: ordersLoading, refetch } = useQuery({
+    queryKey: restaurantId ? [`/api/restaurants/${restaurantId}/orders`] : [],
+    queryFn: async () => {
+      if (!restaurantId) return [];
+      return apiRequest({
+        method: 'GET',
+        url: `/api/restaurants/${restaurantId}/orders`
+      });
+    },
+    enabled: !!restaurantId,
+    refetchInterval: 30000 // Refetch every 30 seconds
+  });
+
+  // Update local state when fetched orders change
+  useEffect(() => {
+    if (fetchedOrders?.length) {
+      setOrders(fetchedOrders);
+    }
+  }, [fetchedOrders]);
+
+  // Filter orders by status
+  useEffect(() => {
+    setPendingOrders(orders.filter(order => order.status === 'pending'));
+    setConfirmedOrders(orders.filter(order => order.status === 'confirmed'));
+    setPreparingOrders(orders.filter(order => order.status === 'preparing'));
+    setServedOrders(orders.filter(order => order.status === 'served'));
+    setCompletedOrders(orders.filter(order => order.status === 'completed'));
+    setCancelledOrders(orders.filter(order => order.status === 'cancelled'));
+  }, [orders]);
+
+  // Listen for new orders via WebSocket
+  useEffect(() => {
+    if (!restaurantId) return;
+
+    const handleNewOrder = (order: any) => {
+      setOrders(prev => {
+        // Check if order already exists
+        const exists = prev.some(o => o.id === order.id);
+        if (exists) return prev;
+        return [...prev, order];
+      });
+      // Also refetch to ensure we have the latest data
+      refetch();
     };
 
-    // Register event listener safely
-    try {
-      addEventListener('order-patch', handleOrderStatusUpdate);
-      // also keep compatibility
-      addEventListener('order-status-updated', handleOrderStatusUpdate);
-    } catch (error) {
-      console.error('Error registering WebSocket listener:', error);
-    }
+    const handleOrderUpdate = (update: any) => {
+      setOrders(prev => prev.map(order => 
+        order.id === update.id ? { ...order, ...update } : order
+      ));
+      // Also refetch to ensure we have the latest data
+      refetch();
+    };
+
+    addEventListener('new-order-received', handleNewOrder);
+    addEventListener('order-patch', handleOrderUpdate);
 
     return () => {
-      try {
-        removeEventListener('order-patch', handleOrderStatusUpdate);
-        removeEventListener('order-status-updated', handleOrderStatusUpdate);
-      } catch (error) {
-        console.error('Error removing WebSocket listener:', error);
-      }
+      removeEventListener('new-order-received', handleNewOrder);
+      removeEventListener('order-patch', handleOrderUpdate);
     };
-  }, [restaurantId, queryClient, ordersQueryKey, activeOrdersQueryKey]);
-  
-  const { data: orders = [], isLoading, error } = useQuery<Order[]>({
-    queryKey: ordersQueryKey,
-    queryFn: async () => {
-      try {
-        const result = await apiRequest({
-          method: 'GET',
-          url: `/api/restaurants/${restaurantId}/orders`
-        });
-        return result;
-      } catch (error) {
-        throw error;
-      }
-    },
-    retry: 1,
-    retryOnMount: false,
-    refetchOnWindowFocus: false,
-    staleTime: 30000, // Consider data fresh for 30 seconds
-    enabled: !!restaurantId && restaurantId > 0 && !lightweight
-  });
-  
-  const { data: activeOrders = [], isLoading: isLoadingActive } = useQuery<Order[] | LightweightOrder[]>({
-    queryKey: activeOrdersQueryKey,
-    queryFn: async () => {
-      try {
-        const endpoint = lightweight 
-          ? `/api/restaurants/${restaurantId}/active-orders/thin?limit=${limit}`
-          : `/api/restaurants/${restaurantId}/active-orders?limit=${limit}`;
-        
-        const result = await apiRequest({
-          method: 'GET',
-          url: endpoint
-        });
-        return result;
-      } catch (error) {
-        throw error;
-      }
-    },
-    retry: 1,
-    retryOnMount: false,
-    refetchOnWindowFocus: false,
-    staleTime: lightweight ? 10000 : 30000, // Lightweight data can be more frequently refreshed
-    refetchInterval: lightweight ? 15000 : false, // Auto-refresh lightweight data every 15 seconds
-    enabled: !!restaurantId && restaurantId > 0
-  });
-  
-  // Create order mutation
-  const createOrderMutation = useMutation({
-    mutationFn: async (orderData: {
-      customerName: string;
-      tableId: number;
-      restaurantId: number;
-      status: OrderStatus;
-      total: string;
-      items: Array<{
-        menuItemId: number;
-        quantity: number;
-        price: string;
-      }>;
-    }) => {
-      const response = await apiRequest({
-        method: 'POST',
-        url: `/api/restaurants/${restaurantId}/orders`,
-        data: orderData
-      });
-      return response;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ordersQueryKey
-      });
-      queryClient.invalidateQueries({
-        queryKey: activeOrdersQueryKey
-      });
-      
-      // Notify via WebSocket about new order
-      sendMessage({
-        type: 'new-order',
-        payload: {
-          restaurantId
-        }
-      });
-    }
-  });
-  
+  }, [restaurantId, refetch]);
+
   // Update order status mutation
-  const updateOrderStatusMutation = useMutation({
-    mutationFn: async ({ orderId, status }: { orderId: number; status: OrderStatus }) => {
-      const response = await apiRequest({
+  const { mutate: updateOrderStatus } = useMutation({
+    mutationFn: async ({ orderId, status }: { orderId: number, status: string }) => {
+      if (!restaurantId) throw new Error('Restaurant ID is required');
+      return apiRequest({
         method: 'PUT',
         url: `/api/restaurants/${restaurantId}/orders/${orderId}`,
         data: { status }
       });
-      return response;
     },
-    onSuccess: (_, { orderId, status }) => {
-      queryClient.invalidateQueries({
-        queryKey: ordersQueryKey
-      });
-      queryClient.invalidateQueries({
-        queryKey: activeOrdersQueryKey
-      });
+    onSuccess: (data, variables) => {
+      // Update local state
+      setOrders(prev => prev.map(order => 
+        order.id === variables.orderId ? { ...order, status: variables.status } : order
+      ));
       
-      // Notify via WebSocket about order status update
-      sendMessage({
-        type: 'update-order-status',
-        payload: {
-          orderId,
-          status,
-          restaurantId
-        }
+      // Send WebSocket notification
+      if (restaurantId) {
+        sendMessage({
+          type: 'update-order-status',
+          payload: {
+            orderId: variables.orderId,
+            status: variables.status,
+            restaurantId
+          }
+        });
+      }
+      
+      // Invalidate queries
+      queryClient.invalidateQueries({
+        queryKey: [`/api/restaurants/${restaurantId}/orders`]
       });
     }
   });
 
-  // Edit order items mutation
-  const editOrderMutation = useMutation({
-    mutationFn: async ({ orderId, items }: { 
-      orderId: number; 
-      items: Array<{
-        menuItemId: number;
-        quantity: number;
-        price: string;
-        customizations?: string;
-      }>;
-    }) => {
-      const response = await apiRequest({
-        method: 'PUT',
-        url: `/api/restaurants/${restaurantId}/orders/${orderId}`,
-        data: { 
-          action: 'update_items',
-          items 
-        }
+  // Create order mutation
+  const { mutate: createOrder } = useMutation({
+    mutationFn: async (orderData: any) => {
+      if (!restaurantId) throw new Error('Restaurant ID is required');
+      return apiRequest({
+        method: 'POST',
+        url: `/api/restaurants/${restaurantId}/orders`,
+        data: orderData
       });
-      return response;
     },
-    onSuccess: (_, { orderId }) => {
-      queryClient.invalidateQueries({
-        queryKey: ordersQueryKey
-      });
-      queryClient.invalidateQueries({
-        queryKey: activeOrdersQueryKey
-      });
+    onSuccess: (data) => {
+      // Update local state
+      setOrders(prev => [...prev, data]);
       
-      // Notify via WebSocket about order update
-      sendMessage({
-        type: 'order-updated',
-        payload: {
-          orderId,
-          restaurantId
-        }
-      });
-    }
-  });
-
-  // Delete order mutation
-  const deleteOrderMutation = useMutation({
-    mutationFn: async (orderId: number) => {
-      const response = await apiRequest({
-        method: 'DELETE',
-        url: `/api/restaurants/${restaurantId}/orders/${orderId}`
-      });
-      return response;
-    },
-    onSuccess: (_, orderId) => {
+      // Invalidate queries
       queryClient.invalidateQueries({
-        queryKey: ordersQueryKey
-      });
-      queryClient.invalidateQueries({
-        queryKey: activeOrdersQueryKey
-      });
-      
-      // Notify via WebSocket about order deletion
-      sendMessage({
-        type: 'order-deleted',
-        payload: {
-          orderId,
-          restaurantId
-        }
+        queryKey: [`/api/restaurants/${restaurantId}/orders`]
       });
     }
   });
   
+  // Get orders by table session ID
+  const getOrdersByTableSessionId = useCallback(async (tableSessionId: number) => {
+    if (!restaurantId) throw new Error('Restaurant ID is required');
+    
+    // First check if we have the orders in cache
+    const cachedOrders = orders.filter(order => order.tableSessionId === tableSessionId);
+    if (cachedOrders.length > 0) {
+      return cachedOrders;
+    }
+    
+    // If not in cache or empty, fetch directly
+    return apiRequest({
+      method: 'GET',
+      url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}/orders`
+    });
+  }, [restaurantId, orders]);
+
+  // Derived stats
+  const stats = useMemo(() => {
+    return {
+      total: orders.length,
+      pending: pendingOrders.length,
+      confirmed: confirmedOrders.length,
+      preparing: preparingOrders.length,
+      served: servedOrders.length,
+      completed: completedOrders.length,
+      cancelled: cancelledOrders.length,
+      active: pendingOrders.length + confirmedOrders.length + preparingOrders.length + servedOrders.length
+    };
+  }, [
+    orders.length,
+    pendingOrders.length,
+    confirmedOrders.length,
+    preparingOrders.length,
+    servedOrders.length,
+    completedOrders.length,
+    cancelledOrders.length
+  ]);
+
   return {
     orders,
-    activeOrders,
-    isLoading: lightweight ? isLoadingActive : (isLoading || isLoadingActive),
-    error,
-    createOrder: createOrderMutation.mutate,
-    updateOrderStatus: updateOrderStatusMutation.mutate,
-    editOrder: editOrderMutation.mutate,
-    deleteOrder: deleteOrderMutation.mutate,
-    isCreating: createOrderMutation.isPending,
-    isUpdating: updateOrderStatusMutation.isPending,
-    isEditing: editOrderMutation.isPending,
-    isDeleting: deleteOrderMutation.isPending
+    pendingOrders,
+    confirmedOrders,
+    preparingOrders,
+    servedOrders,
+    completedOrders,
+    cancelledOrders,
+    ordersLoading,
+    updateOrderStatus,
+    createOrder,
+    stats,
+    getOrdersByTableSessionId,
+    refetch
   };
 }
 

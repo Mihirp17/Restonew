@@ -150,7 +150,7 @@ export function BillGenerationDialog({
         });
 
         // Add bill status to customers
-        const customersWithBillStatus = customersWithOrders.map(customer => ({
+        const customersWithBillStatus = customersWithOrders.map((customer: Customer) => ({
           ...customer,
           existingBill: sessionBills.find((bill: any) => bill.customerId === customer.id),
           hasExistingBill: sessionBills.some((bill: any) => bill.customerId === customer.id)
@@ -225,17 +225,20 @@ export function BillGenerationDialog({
         
         for (const customer of tableSession.customers) {
           if (customer.totalAmount > 0) {
-            const total = customer.totalAmount;
+            const subtotal = customer.totalAmount;
+            // No automatic tax calculation - prices in Spain include tax
+            const tax = 0;
+            const total = subtotal;
 
             const billData = {
               billNumber: generateBillNumber(),
               tableSessionId: tableSession.id,
               customerId: customer.id,
               type: 'individual',
-              subtotal: total.toString(),
-              tax: '0.00',
+              subtotal: subtotal.toString(),
+              tax: tax.toFixed(2),
               tip: '0.00',
-              total: total.toString(),
+              total: total.toFixed(2),
               paymentMethod: 'cash',
               status: 'pending'
             };
@@ -279,17 +282,20 @@ export function BillGenerationDialog({
 
       } else if (selectedBillType === 'combined') {
         // Generate one combined bill for all customers
-        const total = calculateTotal(tableSession.customers.map(c => c.id));
+        const subtotal = calculateTotal(tableSession.customers.map(c => c.id));
+        // No automatic tax - prices in Spain include tax
+        const tax = 0;
+        const total = subtotal;
 
         const billData = {
           billNumber: generateBillNumber(),
           tableSessionId: tableSession.id,
           customerId: null, // No specific customer for combined bill
           type: 'combined',
-          subtotal: total.toString(),
-          tax: '0.00',
+          subtotal: subtotal.toString(),
+          tax: tax.toFixed(2),
           tip: '0.00',
-          total: total.toString(),
+          total: total.toFixed(2),
           paymentMethod: 'cash',
           status: 'pending'
         };
@@ -307,17 +313,20 @@ export function BillGenerationDialog({
 
       } else if (selectedBillType === 'custom' && selectedCustomers.length > 0) {
         // Generate bill for selected customers
-        const total = calculateTotal(selectedCustomers);
+        const subtotal = calculateTotal(selectedCustomers);
+        // No automatic tax - prices in Spain include tax
+        const tax = 0;
+        const total = subtotal;
 
         const billData = {
           billNumber: generateBillNumber(),
           tableSessionId: tableSession.id,
           customerId: selectedCustomers.length === 1 ? selectedCustomers[0] : null,
           type: 'partial',
-          subtotal: total.toString(),
-          tax: '0.00',
+          subtotal: subtotal.toString(),
+          tax: tax.toFixed(2),
           tip: '0.00',
-          total: total.toString(),
+          total: total.toFixed(2),
           paymentMethod: 'cash',
           status: 'pending'
         };
@@ -404,7 +413,24 @@ export function BillGenerationDialog({
             {/* Bill Type Selection */}
             <Card>
               <CardHeader>
-                <CardTitle>Bill Type</CardTitle>
+                <CardTitle className="flex items-center justify-between">
+                  <span>Bill Type</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      // Import and open advanced dialog
+                      import('./advanced-bill-split-dialog').then(({ AdvancedBillSplitDialog }) => {
+                        // This would need to be handled differently in a real implementation
+                        // For now, we'll add a note about the advanced features
+                      });
+                    }}
+                    className="text-blue-600 border-blue-600 hover:bg-blue-50"
+                  >
+                    <Calculator className="h-4 w-4 mr-1" />
+                    Advanced Splitting
+                  </Button>
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -496,7 +522,10 @@ export function BillGenerationDialog({
                   <div className="space-y-4">
                     {tableSession.customers && tableSession.customers.length > 0 ? (
                       tableSession.customers.map(customer => {
-                        const total = customer.totalAmount;
+                        const subtotal = customer.totalAmount;
+                        // No tax calculation - prices include tax in Spain
+                        const tax = 0;
+                        const total = subtotal;
 
                         return (
                           <div key={customer.id} className={`p-4 border rounded-lg ${
@@ -519,7 +548,11 @@ export function BillGenerationDialog({
                             </div>
                             <div className="text-sm">
                               <div className="flex justify-between">
-                                <span>Total (VAT included):</span>
+                                <span>Subtotal:</span>
+                                <span>{formatCurrency(subtotal)}</span>
+                              </div>
+                              <div className="flex justify-between font-medium border-t pt-1 mt-1">
+                                <span>Total (tax included):</span>
                                 <span>{formatCurrency(total)}</span>
                               </div>
                               {customer.hasExistingBill && (
@@ -541,57 +574,87 @@ export function BillGenerationDialog({
 
                 {selectedBillType === 'combined' && (
                   <div className="p-4 border rounded-lg">
-                    <div className="flex items-center justify-between mb-4">
-                      <span className="font-medium">Combined Bill - Table {tableSession.table?.number || 'Unknown'}</span>
-                      <span className="font-bold text-lg">{formatCurrency(calculateTotal((tableSession.customers || []).map(c => c.id)))}</span>
-                    </div>
-                    
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <span>Total (VAT included):</span>
-                        <span>{formatCurrency(calculateTotal((tableSession.customers || []).map(c => c.id)))}</span>
-                      </div>
-                      <Separator />
-                      {tableSession.customers && tableSession.customers.length > 0 && (
-                        <div className="grid grid-cols-2 gap-4 mt-4">
-                          {tableSession.customers.map(customer => (
-                            <div key={customer.id} className="text-xs">
-                              <div className="font-medium">{customer.name}</div>
-                              <div className="text-gray-500">{formatCurrency(customer.totalAmount)}</div>
+                    {(() => {
+                      const subtotal = calculateTotal((tableSession.customers || []).map(c => c.id));
+                      // No tax calculation - prices include tax in Spain
+                      const tax = 0;
+                      const total = subtotal;
+                      
+                      return (
+                        <>
+                          <div className="flex items-center justify-between mb-4">
+                            <span className="font-medium">Combined Bill - Table {tableSession.table?.number || 'Unknown'}</span>
+                            <span className="font-bold text-lg">{formatCurrency(total)}</span>
+                          </div>
+                          
+                          <div className="space-y-2 text-sm">
+                            <div className="flex justify-between">
+                              <span>Subtotal:</span>
+                              <span>{formatCurrency(subtotal)}</span>
                             </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                            <div className="flex justify-between font-medium border-t pt-1 mt-1">
+                              <span>Total (tax included):</span>
+                              <span>{formatCurrency(total)}</span>
+                            </div>
+                          </div>
+                        </>
+                      );
+                    })()}
+                    <Separator />
+                    {tableSession.customers && tableSession.customers.length > 0 && (
+                      <div className="grid grid-cols-2 gap-4 mt-4">
+                        {tableSession.customers.map(customer => (
+                          <div key={customer.id} className="text-xs">
+                            <div className="font-medium">{customer.name}</div>
+                            <div className="text-gray-500">{formatCurrency(customer.totalAmount)}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
 
                 {selectedBillType === 'custom' && selectedCustomers.length > 0 && tableSession.customers && (
                   <div className="p-4 border rounded-lg">
-                    <div className="flex items-center justify-between mb-4">
-                      <span className="font-medium">
-                        Custom Bill ({selectedCustomers.length} customer{selectedCustomers.length !== 1 ? 's' : ''})
-                      </span>
-                      <span className="font-bold text-lg">{formatCurrency(calculateTotal(selectedCustomers))}</span>
-                    </div>
-                    
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <span>Total (VAT included):</span>
-                        <span>{formatCurrency(calculateTotal(selectedCustomers))}</span>
-                      </div>
-                      <Separator />
-                      <div className="mt-4">
-                        <div className="text-xs font-medium mb-1">Included customers:</div>
-                        {tableSession.customers
-                          .filter(c => selectedCustomers.includes(c.id))
-                          .map(customer => (
-                            <div key={customer.id} className="flex justify-between text-xs">
-                              <span>{customer.name}</span>
-                              <span>{formatCurrency(customer.totalAmount)}</span>
+                    {(() => {
+                      const subtotal = calculateTotal(selectedCustomers);
+                      // No tax calculation - prices include tax in Spain
+                      const tax = 0;
+                      const total = subtotal;
+                      
+                      return (
+                        <>
+                          <div className="flex items-center justify-between mb-4">
+                            <span className="font-medium">
+                              Custom Bill ({selectedCustomers.length} customer{selectedCustomers.length !== 1 ? 's' : ''})
+                            </span>
+                            <span className="font-bold text-lg">{formatCurrency(total)}</span>
+                          </div>
+                          
+                          <div className="space-y-2 text-sm">
+                            <div className="flex justify-between">
+                              <span>Subtotal:</span>
+                              <span>{formatCurrency(subtotal)}</span>
                             </div>
-                          ))}
-                      </div>
+                            <div className="flex justify-between font-medium border-t pt-1 mt-1">
+                              <span>Total (tax included):</span>
+                              <span>{formatCurrency(total)}</span>
+                            </div>
+                          </div>
+                        </>
+                      );
+                    })()}
+                    <Separator />
+                    <div className="mt-4">
+                      <div className="text-xs font-medium mb-1">Included customers:</div>
+                      {tableSession.customers
+                        .filter(c => selectedCustomers.includes(c.id))
+                        .map(customer => (
+                          <div key={customer.id} className="flex justify-between text-xs">
+                            <span>{customer.name}</span>
+                            <span>{formatCurrency(customer.totalAmount)}</span>
+                          </div>
+                        ))}
                     </div>
                   </div>
                 )}

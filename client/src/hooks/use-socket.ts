@@ -1,64 +1,136 @@
-import { useEffect, useCallback, useRef } from 'react';
-import { connectWebSocket, disconnectWebSocket, addEventListener, removeEventListener, sendMessage, isConnected, reconnectWebSocket } from '@/lib/socket';
+import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useAuth } from './use-auth';
+import { connectWebSocket, disconnectWebSocket, addEventListener, isConnected } from '@/lib/socket';
 
-export function useSocket(restaurantId?: number, tableId?: number) {
-  // Track registered listeners for cleanup
-  const listenersRef = useRef<Map<string, Function>>(new Map());
-  
-  // Connect to WebSocket on mount and disconnect on unmount
+export function useSocket(restaurantId?: number | null) {
+  const [isSocketConnected, setIsSocketConnected] = useState(false);
+  const [lastMessage, setLastMessage] = useState<any>(null);
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
   useEffect(() => {
-    if (restaurantId && restaurantId > 0) {
-      // Small delay to ensure component is fully mounted
-      const timer = setTimeout(() => {
-        connectWebSocket(restaurantId, tableId);
-      }, 100);
-      
-      return () => {
-        clearTimeout(timer);
-        // Clean up all listeners registered by this hook instance
-        listenersRef.current.forEach((callback, event) => {
-          removeEventListener(event, callback);
-        });
-        listenersRef.current.clear();
-        disconnectWebSocket();
-      };
+    // Early return if no valid restaurantId or user
+    if (!restaurantId || restaurantId <= 0 || !user) {
+      console.log('[useSocket] No valid restaurantId or user, skipping WebSocket connection');
+      setIsSocketConnected(false);
+      return;
     }
-  }, [restaurantId, tableId]);
-  
-  // Enhanced addEventListener that tracks listeners for cleanup
-  const trackedAddEventListener = useCallback((event: string, callback: Function) => {
-    // Remove any existing listener for this event from this hook instance
-    if (listenersRef.current.has(event)) {
-      const oldCallback = listenersRef.current.get(event);
-      if (oldCallback) {
-        removeEventListener(event, oldCallback);
-      }
+
+    // Check if already connected
+    if (isConnected()) {
+      setIsSocketConnected(true);
+      return;
+    }
+
+    console.log('[useSocket] Setting up WebSocket connection for restaurant:', restaurantId);
+
+    // Connect to WebSocket
+    try {
+      connectWebSocket(restaurantId);
+    } catch (error) {
+      console.error('[useSocket] Error connecting to WebSocket:', error);
+      setIsSocketConnected(false);
+      return;
     }
     
-    // Add new listener and track it
-    addEventListener(event, callback);
-    listenersRef.current.set(event, callback);
-  }, []);
-  
-  // Enhanced removeEventListener
-  const trackedRemoveEventListener = useCallback((event: string, callback: Function) => {
-    removeEventListener(event, callback);
-    listenersRef.current.delete(event);
-  }, []);
-  
-  // Create reconnect callback
-  const reconnect = useCallback(() => {
-    if (restaurantId && restaurantId > 0) {
-      reconnectWebSocket(restaurantId, tableId);
-    }
-  }, [restaurantId, tableId]);
-  
-  // Return the socket methods
-  return {
-    addEventListener: trackedAddEventListener,
-    removeEventListener: trackedRemoveEventListener,
-    sendMessage,
-    isConnected,
-    reconnect
+    // Set up event listeners
+    const unsubscribeConnection = addEventListener('connection-established', () => {
+      console.log('[useSocket] WebSocket connection established');
+      setIsSocketConnected(true);
+    });
+    
+    const unsubscribeDisconnect = addEventListener('disconnected', () => {
+      console.log('[useSocket] WebSocket disconnected');
+      setIsSocketConnected(false);
+    });
+    
+    const unsubscribeError = addEventListener('connection-failed', (error) => {
+      console.error('[useSocket] WebSocket connection failed:', error);
+      setIsSocketConnected(false);
+    });
+    
+    const unsubscribeNewOrder = addEventListener('new-order-received', (data) => {
+      setLastMessage({ type: 'new-order-received', data });
+      // Invalidate orders query
+      queryClient.invalidateQueries({
+        queryKey: [`/api/restaurants/${restaurantId}/orders`]
+      });
+      // Invalidate active orders queries so Live Orders widget refreshes
+      queryClient.invalidateQueries({
+        queryKey: [`/api/restaurants/${restaurantId}/active-orders`]
+      });
+      queryClient.invalidateQueries({
+        queryKey: [`/api/restaurants/${restaurantId}/active-orders-lightweight`]
+      });
+      // Invalidate table sessions to refresh session totals
+      queryClient.invalidateQueries({
+        queryKey: [`/api/restaurants/${restaurantId}/table-sessions`]
+      });
+    });
+    
+    const unsubscribeTableStatus = addEventListener('table-status-changed', (data) => {
+      setLastMessage({ type: 'table-status-changed', data });
+      // Invalidate tables query
+      queryClient.invalidateQueries({
+        queryKey: [`/api/restaurants/${restaurantId}/tables`]
+      });
+    });
+    
+    const unsubscribeSessionTotals = addEventListener('session-totals-updated', (data) => {
+      setLastMessage({ type: 'session-totals-updated', data });
+      // Invalidate table sessions query and specific session if applicable
+      queryClient.invalidateQueries({
+        queryKey: [`/api/restaurants/${restaurantId}/table-sessions`]
+      });
+      
+      if (data?.sessionId) {
+        queryClient.invalidateQueries({
+          queryKey: [`/api/restaurants/${restaurantId}/table-sessions/${data.sessionId}`]
+        });
+      }
+    });
+    
+    const unsubscribeOrderStatus = addEventListener('order-status-updated', (data) => {
+      setLastMessage({ type: 'order-status-updated', data });
+      // Invalidate orders query
+      queryClient.invalidateQueries({
+        queryKey: [`/api/restaurants/${restaurantId}/orders`]
+      });
+      // Invalidate active orders queries
+      queryClient.invalidateQueries({
+        queryKey: [`/api/restaurants/${restaurantId}/active-orders`]
+      });
+      queryClient.invalidateQueries({
+        queryKey: [`/api/restaurants/${restaurantId}/active-orders-lightweight`]
+      });
+      // Invalidate table sessions to refresh session totals
+      queryClient.invalidateQueries({
+        queryKey: [`/api/restaurants/${restaurantId}/table-sessions`]
+      });
+    });
+
+    // Cleanup on unmount
+    return () => {
+      try {
+        unsubscribeConnection();
+        unsubscribeDisconnect();
+        unsubscribeError();
+        unsubscribeNewOrder();
+        unsubscribeTableStatus();
+        unsubscribeSessionTotals();
+        unsubscribeOrderStatus();
+        disconnectWebSocket();
+      } catch (error) {
+        console.error('[useSocket] Error during cleanup:', error);
+      }
+    };
+  }, [restaurantId, user, queryClient]);
+
+  // Always return a consistent interface
+  return { 
+    isConnected: isSocketConnected, 
+    lastMessage,
+    addEventListener: restaurantId && restaurantId > 0 ? addEventListener : () => () => {} // Return no-op unsubscribe function if not connected
   };
 }

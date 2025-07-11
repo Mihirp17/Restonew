@@ -120,14 +120,13 @@ export default function CustomerMenu() {
         const restaurantData = await restaurantResponse.json();
         setRestaurant(restaurantData);
         
-        // Fetch menu items
-        const menuResponse = await fetch(`/api/restaurants/${restaurantId}/menu-items`);
+        // Fetch menu items from public endpoint
+        const menuResponse = await fetch(`/api/public/restaurants/${restaurantId}/menu-items`);
         if (!menuResponse.ok) throw new Error("Failed to fetch menu items");
         const menuData = await menuResponse.json();
         
-        // Filter only available items
-        const availableItems = menuData.filter((item: MenuItem) => item.isAvailable);
-        setMenuItems(availableItems);
+        // Menu items are already filtered for availability on the server
+        setMenuItems(menuData);
       } catch (error) {
         console.error("Error fetching data:", error);
         toast({
@@ -161,6 +160,10 @@ export default function CustomerMenu() {
         if (!customerName.trim()) {
           throw new Error("Customer name is required");
         }
+        
+        if (!restaurantId || !tableId) {
+          throw new Error("Invalid restaurant or table ID");
+        }
 
         // First check for existing active session for this table
         const existingSessionResponse = await fetch(`/api/public/restaurants/${restaurantId}/table-sessions?tableId=${tableId}`, {
@@ -174,7 +177,9 @@ export default function CustomerMenu() {
         
         if (existingSessionResponse.ok) {
           const existingSessions = await existingSessionResponse.json();
-          const activeSession = existingSessions.find((session: any) => session.status === 'active');
+          const activeSession = existingSessions.find((session: any) => 
+            session.status === 'active' || session.status === 'waiting'
+          );
           
           if (activeSession) {
             // Join existing session
@@ -184,16 +189,16 @@ export default function CustomerMenu() {
         }
 
         if (!sessionData) {
-          // Create new session if none exists
+          // Create new session if none exists (starts as 'waiting')
           const sessionResponse = await fetch(`/api/public/restaurants/${restaurantId}/table-sessions`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              tableId: parseInt(tableId!),
+              tableNumber: parseInt(tableId!), // Send as tableNumber since URL uses table number
               partySize: 1,
-              status: "active"
+              status: "waiting" // Start as waiting, will become active when first order is placed
             })
           });
           
@@ -203,6 +208,9 @@ export default function CustomerMenu() {
           }
 
           sessionData = await sessionResponse.json();
+          if (!sessionData || !sessionData.id) {
+            throw new Error("Invalid session data received from server");
+          }
           console.log("Table session created:", sessionData);
         } else {
           // Update party size for existing session when new customer joins
@@ -351,15 +359,26 @@ export default function CustomerMenu() {
     }
 
     setIsSubmitting(true);
-    const sessionResult = await createCustomerAndSession();
-    if (sessionResult) {
+    try {
+      const sessionResult = await createCustomerAndSession();
+      if (!sessionResult) {
+        throw new Error("Failed to create your session. Please try again.");
+      }
       setIsCustomerInfoSubmitted(true);
       toast({
         title: "Welcome!",
         description: "Your session has been created successfully. You can now browse our menu.",
       });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Something went wrong. Please try again.",
+        variant: "destructive"
+      });
+      console.error("Error creating session:", error);
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
 
   // Get unique categories from menu items
@@ -627,6 +646,18 @@ export default function CustomerMenu() {
           throw new Error("Session could not be established. Please refresh the page and try again.");
         }
 
+        // Fetch table session to get the correct table database ID
+        const sessionResponse = await fetch(`/api/public/restaurants/${restaurantId}/table-sessions`);
+        if (!sessionResponse.ok) {
+          throw new Error("Failed to fetch table session data");
+        }
+        const sessions = await sessionResponse.json();
+        const currentSession = sessions.find((session: any) => session.id === currentTableSessionId);
+        
+        if (!currentSession || !currentSession.tableId) {
+          throw new Error("Table session not found or invalid");
+        }
+
       const orderData = {
           customerId: currentCustomerId,
           tableSessionId: currentTableSessionId,
@@ -634,7 +665,7 @@ export default function CustomerMenu() {
         status: "pending",
         total: cartTotal.toString(),
         restaurantId: parseInt(restaurantId),
-        tableId: parseInt(tableId),
+        tableId: currentSession.tableId, // Use the actual table database ID from session
         notes: "",
         isGroupOrder: false,
         items: cart.map(item => ({
@@ -652,17 +683,17 @@ export default function CustomerMenu() {
           itemCount: orderData.items.length
         });
 
-      // Place the order
-      const response = await apiRequest("POST", `/api/restaurants/${restaurantId}/orders`, orderData);
+      // Place the order using public endpoint
+      const response = await fetch(`/api/public/restaurants/${restaurantId}/orders`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(orderData)
+      });
       
-      if (response.ok) {
-        // Update table status to occupied
-        await apiRequest("PATCH", `/api/restaurants/${restaurantId}/tables/${tableId}`, {
-          isOccupied: true
-        });
-
-        // Update table status in cache with correct query key
-        queryClient.invalidateQueries({ queryKey: [`/api/restaurants/${restaurantId}/tables`] });
+              if (response.ok) {
+          // Table status is automatically updated on the server when order is created
         
         // Close ordering dialog and show success dialog
         setIsOrderingDialogOpen(false);
@@ -868,7 +899,14 @@ export default function CustomerMenu() {
                 disabled={!customerName.trim() || isSubmitting}
                 className="w-full h-12 bg-red-600 hover:bg-red-700 text-white rounded-xl font-semibold text-lg transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:transform-none"
               >
-                {isSubmitting ? "Setting up..." : "Continue to Menu"}
+                {isSubmitting ? (
+                  <span className="flex items-center justify-center space-x-2">
+                    <span className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                    <span>Setting up...</span>
+                  </span>
+                ) : (
+                  "Continue to Menu"
+                )}
               </Button>
               <p className="text-xs text-gray-500 text-center mt-3">
                 * Required field. Your information helps us provide better service.
@@ -996,7 +1034,16 @@ export default function CustomerMenu() {
 
         {/* Menu Items */}
         <div className="px-6 pb-32 space-y-4">
-          {filteredMenuItems.length > 0 ? (
+          {isLoading ? (
+            <div className="text-center py-16">
+              <div className="w-16 h-16 mx-auto mb-4 animate-spin text-red-500">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2v4M22 11h-4M6 20v-4M2 11a10 10 0 0 1 10-10 10 10 0 0 1 10 10-10 10 0 0 1-10 10 10 10 0 0 1-10-10"/>
+                </svg>
+              </div>
+              <p className="text-gray-900 text-lg font-medium">Loading menu...</p>
+            </div>
+          ) : filteredMenuItems.length > 0 ? (
             filteredMenuItems.map((item) => (
               <Card key={item.id} className="overflow-hidden border-gray-200 shadow-lg hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1 bg-white rounded-2xl group">
                 <CardContent className="p-0">

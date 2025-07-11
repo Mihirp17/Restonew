@@ -5,11 +5,15 @@ import session from 'express-session';
 import { sessionConfig, authenticate, authorize, authorizeRestaurant, loginPlatformAdmin, loginRestaurant, loginUser } from "./auth";
 import { setupWebSocketServer } from "./socket";
 import { z } from "zod";
-import { insertRestaurantSchema, insertUserSchema, insertMenuItemSchema, insertTableSchema, insertOrderSchema, insertOrderItemSchema, insertFeedbackSchema } from "@shared/schema";
+import { insertRestaurantSchema, insertUserSchema, insertMenuItemSchema, insertTableSchema, insertOrderSchema, insertOrderItemSchema, insertFeedbackSchema, BillItem, InsertBillItem } from "@shared/schema";
 // Stripe functionality removed - import { stripe, createOrUpdateCustomer, createSubscription, updateSubscription, cancelSubscription, generateClientSecret, handleWebhookEvent, PLANS } from "./stripe";
 import QRCode from 'qrcode';
 import { generateRestaurantInsights, handleRestaurantChat, generateAnalyticsInsights } from './ai';
 import { OrderItem, Order } from "@shared/schema";
+import { ensureTableExists, createDefaultTablesForRestaurant, bulkManageTables } from './table-manager';
+import { eq, desc } from "drizzle-orm";
+import * as schema from "@shared/schema";
+import { db } from "./db";
 
 // Schema for login requests
 const loginSchema = z.object({
@@ -22,6 +26,7 @@ const dateRangeSchema = z.object({
   startDate: z.string().transform(s => new Date(s)),
   endDate: z.string().transform(s => new Date(s))
 });
+
 
 export async function registerRoutes(app: Express): Promise<Server> {
   console.log("Starting route registration...");
@@ -274,7 +279,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const status = req.query.status as string;
       const tableSessions = await storage.getTableSessionsByRestaurantId(restaurantId, status);
-      return res.json(tableSessions);
+      
+      // Recalculate session totals for active and waiting sessions to ensure accuracy
+      const sessionsToUpdate = tableSessions.filter(session => 
+        session.status === 'active' || session.status === 'waiting'
+      );
+      
+      await Promise.all(
+        sessionsToUpdate.map(session => storage.calculateSessionTotals(session.id, true))
+      );
+      
+      // Fetch updated sessions after recalculation
+      const updatedSessions = await storage.getTableSessionsByRestaurantId(restaurantId, status);
+      return res.json(updatedSessions);
     } catch (error) {
       console.error('Error fetching table sessions:', error);
       return res.status(500).json({ message: 'Failed to fetch table sessions' });
@@ -295,7 +312,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: 'Table session not found' });
       }
 
-      return res.json(tableSession);
+      // Recalculate session totals for active and waiting sessions before returning
+      if (tableSession.status === 'active' || tableSession.status === 'waiting') {
+        await storage.calculateSessionTotals(sessionId, true);
+      }
+
+      // Enrich with customers, table details, and orders
+      const [customers, table, orders] = await Promise.all([
+        storage.getCustomersByTableSessionId(sessionId),
+        storage.getTable(tableSession.tableId),
+        storage.getOrdersByTableSessionId(sessionId)
+      ]);
+
+      const enrichedSession = { ...tableSession, customers, table, orders };
+
+      return res.json(enrichedSession);
     } catch (error) {
       console.error('Error fetching table session:', error);
       return res.status(500).json({ message: 'Failed to fetch table session' });
@@ -368,7 +399,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const bills = await storage.getBillsByTableSessionId(sessionId);
-      return res.json(bills);
+      
+      // Enhance bills with item details
+      const billsWithItems = await Promise.all(
+        bills.map(async (bill) => {
+          const items = await storage.getBillItemsByBillId(bill.id);
+          
+          // Get order item details for each bill item
+          const itemsWithDetails = await Promise.all(
+            items.map(async (billItem: BillItem) => {
+              const orderItem = await storage.getOrderItem(billItem.orderItemId);
+              let menuItem = null;
+              if (orderItem) {
+                menuItem = await storage.getMenuItem(orderItem.menuItemId);
+              }
+              return {
+                ...billItem,
+                orderItem,
+                menuItem
+              };
+            })
+          );
+          
+          return {
+            ...bill,
+            items: itemsWithDetails
+          };
+        })
+      );
+      
+      return res.json(billsWithItems);
     } catch (error) {
       console.error('Error fetching bills:', error);
       return res.status(500).json({ message: 'Failed to fetch bills' });
@@ -392,6 +452,98 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Error creating bill:', error);
       return res.status(500).json({ message: 'Failed to create bill' });
+    }
+  });
+
+  // Create bill endpoint for bill generation dialog
+  app.post('/api/restaurants/:restaurantId/bills', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      // Validate the restaurant exists and user has access
+      const restaurant = await storage.getRestaurant(restaurantId);
+      if (!restaurant) {
+        return res.status(404).json({ message: 'Restaurant not found' });
+      }
+
+      // Check for existing bill if customer ID is provided
+      if (req.body.customerId && req.body.tableSessionId) {
+        const existingBill = await storage.getBillByCustomerAndSession(
+          req.body.customerId, 
+          req.body.tableSessionId
+        );
+        
+        if (existingBill) {
+          return res.status(409).json({ 
+            message: 'Bill already exists for this customer in this session',
+            existingBill 
+          });
+        }
+      }
+
+      const bill = await storage.createBill(req.body);
+
+      // If it's an individual bill, create bill items from customer's orders
+      if (req.body.type === 'individual' && req.body.customerId && req.body.tableSessionId) {
+        try {
+          // Get customer's orders for this session
+          const orders = await storage.getOrdersByRestaurantId(restaurantId);
+          const customerOrders = orders.filter(order => 
+            order.customerId === req.body.customerId && 
+            order.tableSessionId === req.body.tableSessionId
+          );
+
+          // Create bill items for each order item
+          for (const order of customerOrders) {
+            const orderItems = await storage.getOrderItemsByOrderId(order.id);
+            for (const orderItem of orderItems) {
+              await storage.createBillItem({
+                billId: bill.id,
+                orderItemId: orderItem.id,
+                quantity: orderItem.quantity,
+                amount: (parseFloat(orderItem.price) * orderItem.quantity).toString()
+              });
+            }
+          }
+        } catch (error) {
+          console.error('Error creating bill items:', error);
+          // Don't fail the entire request if bill items creation fails
+        }
+      }
+
+      return res.status(201).json(bill);
+    } catch (error) {
+      console.error('Error creating bill:', error);
+      return res.status(500).json({ message: 'Failed to create bill' });
+    }
+  });
+
+  // Create bill item endpoint
+  app.post('/api/restaurants/:restaurantId/bills/:billId/items', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const billId = parseInt(req.params.billId);
+      
+      if (isNaN(restaurantId) || isNaN(billId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or bill ID' });
+      }
+
+      // Verify bill exists and belongs to restaurant
+      const bill = await storage.getBill(billId);
+      if (!bill) {
+        return res.status(404).json({ message: 'Bill not found' });
+      }
+
+      const billItem = await storage.createBillItem(req.body as InsertBillItem);
+
+      return res.status(201).json(billItem);
+    } catch (error) {
+      console.error('Error creating bill item:', error);
+      return res.status(500).json({ message: 'Failed to create bill item' });
     }
   });
 
@@ -431,6 +583,109 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Error fetching bills:', error);
       return res.status(500).json({ message: 'Failed to fetch bills' });
+    }
+  });
+
+  // Public bill request endpoint - customers can request their bill
+  app.post('/api/public/restaurants/:restaurantId/table-sessions/:sessionId/request-bill', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const sessionId = parseInt(req.params.sessionId);
+      
+      if (isNaN(restaurantId) || isNaN(sessionId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or session ID' });
+      }
+
+      const { customerId, splitType } = req.body;
+      
+      if (!customerId || isNaN(parseInt(customerId))) {
+        return res.status(400).json({ message: 'Valid customer ID is required' });
+      }
+
+      // Update session to indicate bill requested
+      await storage.updateTableSession(sessionId, {
+        billRequested: true,
+        billRequestedAt: new Date(),
+        splitType: splitType || 'individual',
+        status: 'bill_requested'
+      });
+
+      // Generate individual bill for this customer if not exists
+      const existingBill = await storage.getBillByCustomerAndSession(parseInt(customerId), sessionId);
+      
+      if (!existingBill) {
+        // Get customer's orders for this session
+        const customerOrders = await storage.getOrdersByRestaurantId(restaurantId);
+        const sessionOrders = customerOrders.filter(order => 
+          order.tableSessionId === sessionId && order.customerId === parseInt(customerId)
+        );
+
+        if (sessionOrders.length > 0) {
+          const subtotal = sessionOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
+          const tax = subtotal * 0.1; // 10% tax
+          const total = subtotal + tax;
+
+          const billNumber = `B${sessionId}-${customerId}-${Date.now()}`;
+          
+          await storage.createBill({
+            billNumber,
+            tableSessionId: sessionId,
+            customerId: parseInt(customerId),
+            type: 'individual',
+            subtotal: subtotal.toString(),
+            tax: tax.toString(),
+            tip: '0.00',
+            total: total.toString(),
+            status: 'pending'
+          });
+        }
+      }
+
+      return res.json({ message: 'Bill requested successfully' });
+    } catch (error) {
+      console.error('Error requesting bill:', error);
+      return res.status(500).json({ message: 'Failed to request bill' });
+    }
+  });
+
+  // Public endpoint to get customer's bill
+  app.get('/api/public/restaurants/:restaurantId/customers/:customerId/bill', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const customerId = parseInt(req.params.customerId);
+      
+      if (isNaN(restaurantId) || isNaN(customerId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or customer ID' });
+      }
+
+      const customer = await storage.getCustomer(customerId);
+      if (!customer) {
+        return res.status(404).json({ message: 'Customer not found' });
+      }
+
+      const bill = await storage.getBillByCustomerAndSession(customerId, customer.tableSessionId);
+      if (!bill) {
+        return res.status(404).json({ message: 'Bill not found' });
+      }
+
+      return res.json(bill);
+    } catch (error) {
+      console.error('Error fetching customer bill:', error);
+      return res.status(500).json({ message: 'Failed to fetch bill' });
+    }
+  });
+
+  // Session cleanup endpoint (called periodically)
+  app.post('/api/cleanup/abandoned-sessions', async (req, res) => {
+    try {
+      const cleanedCount = await storage.cleanupAbandonedSessions();
+      return res.json({ 
+        message: `Cleaned up ${cleanedCount} abandoned sessions`,
+        cleanedCount 
+      });
+    } catch (error) {
+      console.error('Error during session cleanup:', error);
+      return res.status(500).json({ message: 'Failed to cleanup sessions' });
     }
   });
 
@@ -514,20 +769,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: 'Invalid restaurant ID' });
       }
 
-      const { tableId, partySize, status } = req.body;
+      const { tableNumber, partySize, status } = req.body;
       
-      if (!tableId || isNaN(parseInt(tableId))) {
-        return res.status(400).json({ message: 'Valid table ID is required' });
+      if (!tableNumber || isNaN(parseInt(tableNumber))) {
+        return res.status(400).json({ message: 'Valid table number is required' });
+      }
+
+      const tableNum = parseInt(tableNumber);
+      
+      // Check if restaurant exists
+      const restaurant = await storage.getRestaurant(restaurantId);
+      if (!restaurant) {
+        return res.status(404).json({ message: 'Restaurant not found' });
+      }
+
+      // Ensure the table exists, create it if it doesn't
+      const baseUrl = req.protocol + '://' + req.get('host');
+      let table;
+      try {
+        table = await ensureTableExists(restaurantId, tableNum, baseUrl);
+      } catch (error) {
+        console.error('Error ensuring table exists:', error);
+        return res.status(500).json({ message: 'Failed to prepare table for session' });
+      }
+
+      // Check for existing active or waiting sessions for this table
+      const existingSessions = await storage.getTableSessionsByRestaurantId(restaurantId);
+      const activeTableSession = existingSessions.find(session => 
+        session.tableId === table.id && 
+        (session.status === 'active' || session.status === 'waiting')
+      );
+
+      if (activeTableSession) {
+        return res.status(200).json(activeTableSession);
       }
 
       const session = await storage.createTableSession({
         restaurantId,
-        tableId: parseInt(tableId),
+        tableId: table.id, // Use the actual database ID here
         partySize: partySize || 1,
-        status: status || 'active',
+        status: 'waiting', // Start as waiting, will become active when first order is placed
         sessionName: null,
-        splitType: 'individual'
+        splitType: 'individual',
+        totalAmount: "0.00",
+        paidAmount: "0.00"
       });
+
+      // Mark table as occupied immediately when session is created
+      await storage.updateTable(table.id, { isOccupied: true });
 
       return res.status(201).json(session);
     } catch (error) {
@@ -584,6 +873,156 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Error fetching customers:', error);
       return res.status(500).json({ message: 'Failed to fetch customers' });
+    }
+  });
+
+  // Public menu items endpoint for customer menu
+  app.get('/api/public/restaurants/:restaurantId/menu-items', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      const menuItems = await storage.getMenuItems(restaurantId);
+      // Return only available menu items for customers
+      const availableItems = menuItems.filter(item => item.isAvailable);
+      return res.json(availableItems);
+    } catch (error) {
+      console.error('Error fetching menu items:', error);
+      return res.status(500).json({ message: 'Failed to fetch menu items' });
+    }
+  });
+
+  // Public orders endpoint for customer menu
+  app.get('/api/public/restaurants/:restaurantId/orders', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const customerId = req.query.customerId ? parseInt(req.query.customerId as string) : undefined;
+      
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      if (!customerId || isNaN(customerId)) {
+        return res.status(400).json({ message: 'Valid customer ID is required' });
+      }
+
+      const orders = await storage.getOrdersByRestaurantId(restaurantId);
+      // Filter orders by customer ID
+      const customerOrders = orders.filter(order => order.customerId === customerId);
+      
+      // Enrich orders with items and menu details for customer view
+      const enrichedOrders = await Promise.all(
+        customerOrders.map(async (order) => {
+          const items = await storage.getOrderItemsByOrderId(order.id);
+          const itemsWithMenu = await Promise.all(
+            items.map(async (item) => {
+              const menuItem = await storage.getMenuItem(item.menuItemId);
+              return {
+                ...item,
+                menuItem
+              };
+            })
+          );
+          return {
+            ...order,
+            items: itemsWithMenu
+          };
+        })
+      );
+      
+      return res.json(enrichedOrders);
+    } catch (error) {
+      console.error('Error fetching orders:', error);
+      return res.status(500).json({ message: 'Failed to fetch orders' });
+    }
+  });
+
+  // Public create order endpoint for customer menu
+  app.post('/api/public/restaurants/:restaurantId/orders', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      const { customerId, tableSessionId, orderNumber, status, total, tableId, notes, items } = req.body;
+      
+      if (!customerId || !tableSessionId || !orderNumber || !total || !tableId || !items || !Array.isArray(items)) {
+        return res.status(400).json({ message: 'Missing required order fields' });
+      }
+
+      // Check if this is the first order for this session
+      const session = await storage.getTableSession(parseInt(tableSessionId));
+      if (!session) {
+        return res.status(404).json({ message: 'Table session not found' });
+      }
+
+      // If session is still waiting, activate it with the first order
+      if (session.status === 'waiting') {
+        await storage.updateTableSession(parseInt(tableSessionId), {
+          status: 'active',
+          firstOrderTime: new Date()
+        });
+      }
+
+      const order = await storage.createOrder({
+        customerId: parseInt(customerId),
+        tableSessionId: parseInt(tableSessionId),
+        orderNumber,
+        status: status || 'pending',
+        total: total.toString(),
+        restaurantId,
+        tableId: parseInt(tableId),
+        notes: notes || '',
+        isGroupOrder: false
+      });
+
+      // Create order items
+      for (const item of items) {
+        await storage.createOrderItem({
+          orderId: order.id,
+          menuItemId: parseInt(item.menuItemId),
+          quantity: parseInt(item.quantity),
+          price: item.price.toString()
+        });
+      }
+
+      // Update table status to occupied
+      await storage.updateTable(tableId, { isOccupied: true });
+
+      // Get updated session with accurate totals
+      const updatedSession = await storage.getTableSession(parseInt(tableSessionId));
+
+      // Send real-time notification to restaurant
+      const { WebSocket } = await import('ws');
+      const clients = (global as any).wsClients || [];
+      clients.forEach((client: any) => {
+        if (client.readyState === WebSocket.OPEN && client.restaurantId === restaurantId) {
+          client.send(JSON.stringify({
+            type: 'new-order-received',
+            data: { order, tableId }
+          }));
+          
+          // Also send updated session totals
+          if (updatedSession) {
+            client.send(JSON.stringify({
+              type: 'session-totals-updated',
+              data: { 
+                sessionId: tableSessionId,
+                totalAmount: updatedSession.totalAmount,
+                paidAmount: updatedSession.paidAmount
+              }
+            }));
+          }
+        }
+      });
+
+      return res.status(201).json(order);
+    } catch (error) {
+      console.error('Error creating order:', error);
+      return res.status(500).json({ message: 'Failed to create order' });
     }
   });
 
@@ -701,7 +1140,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const ordersWithItems = await Promise.all(
         orders.map(async (order) => {
           const items = await storage.getOrderItemsByOrderId(order.id);
-          return { ...order, items };
+          
+          // Fetch menu item details for each order item
+          const itemsWithDetails = await Promise.all(
+            items.map(async (item) => {
+              const menuItem = await storage.getMenuItem(item.menuItemId);
+              return {
+                ...item,
+                menuItem
+              };
+            })
+          );
+          
+          return { ...order, items: itemsWithDetails };
         })
       );
 
@@ -722,8 +1173,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 10; // Default to 10 for dashboard
       const orders = await storage.getActiveOrdersLightweight(restaurantId, limit);
+      
+      // Add order items with menu item details to each order
+      const ordersWithItems = await Promise.all(
+        orders.map(async (order) => {
+          const items = await storage.getOrderItemsByOrderId(order.id);
+          
+          // Fetch menu item details for each order item
+          const itemsWithDetails = await Promise.all(
+            items.map(async (item) => {
+              const menuItem = await storage.getMenuItem(item.menuItemId);
+              return {
+                ...item,
+                menuItem
+              };
+            })
+          );
+          
+          return { ...order, items: itemsWithDetails };
+        })
+      );
 
-      return res.json(orders);
+      return res.json(ordersWithItems);
     } catch (error) {
       console.error('Error fetching lightweight active orders:', error);
       return res.status(500).json({ message: 'Failed to fetch lightweight active orders' });
@@ -851,7 +1322,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Get the updated order with items
       const items = await storage.getOrderItemsByOrderId(orderId);
-      const completeOrder = { ...updatedOrder, items };
+      
+      // Fetch menu item details for each order item
+      const itemsWithDetails = await Promise.all(
+        items.map(async (item) => {
+          const menuItem = await storage.getMenuItem(item.menuItemId);
+          return {
+            ...item,
+            menuItem
+          };
+        })
+      );
+      
+      const completeOrder = { ...updatedOrder, items: itemsWithDetails };
 
       return res.json(completeOrder);
     } catch (error) {
@@ -1652,6 +2135,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Error fetching bills for table session:', error);
       return res.status(500).json({ message: 'Failed to fetch bills for table session' });
+    }
+  });
+
+  // Get orders by table session ID
+  app.get('/api/restaurants/:restaurantId/table-sessions/:sessionId/orders', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const sessionId = parseInt(req.params.sessionId);
+      
+      if (isNaN(restaurantId) || isNaN(sessionId)) {
+        return res.status(400).json({ message: 'Invalid ID' });
+      }
+
+      // Verify the session belongs to the restaurant
+      const session = await storage.getTableSession(sessionId);
+      if (!session || session.restaurantId !== restaurantId) {
+        return res.status(404).json({ message: 'Table session not found or does not belong to this restaurant' });
+      }
+
+      // Get orders for this session
+      const orders = await db
+        .select()
+        .from(schema.orders)
+        .where(eq(schema.orders.tableSessionId, sessionId))
+        .orderBy(desc(schema.orders.createdAt));
+      
+      return res.json(orders);
+    } catch (error) {
+      console.error('Error fetching session orders:', error);
+      return res.status(500).json({ message: 'Failed to fetch session orders' });
+    }
+  });
+
+  // Public endpoint to get orders by table session ID
+  app.get('/api/public/restaurants/:restaurantId/table-sessions/:sessionId/orders', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const sessionId = parseInt(req.params.sessionId);
+      
+      if (isNaN(restaurantId) || isNaN(sessionId)) {
+        return res.status(400).json({ message: 'Invalid ID' });
+      }
+
+      // Verify the session belongs to the restaurant
+      const session = await storage.getTableSession(sessionId);
+      if (!session || session.restaurantId !== restaurantId) {
+        return res.status(404).json({ message: 'Table session not found or does not belong to this restaurant' });
+      }
+
+      // Get orders for this session
+      const orders = await db
+        .select()
+        .from(schema.orders)
+        .where(eq(schema.orders.tableSessionId, sessionId))
+        .orderBy(desc(schema.orders.createdAt));
+      
+      return res.json(orders);
+    } catch (error) {
+      console.error('Error fetching session orders:', error);
+      return res.status(500).json({ message: 'Failed to fetch session orders' });
     }
   });
 

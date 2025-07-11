@@ -38,7 +38,7 @@ export function useMenu(restaurantId: number) {
     mutationFn: async (menuItemData: Omit<MenuItem, 'id' | 'restaurantId' | 'createdAt' | 'updatedAt'>) => {
       return apiRequest({
         method: 'POST',
-        url: `/api/restaurants/${restaurantId}/menu`,
+        url: `/api/restaurants/${restaurantId}/menu-items`,
         data: menuItemData
       });
     },
@@ -54,7 +54,7 @@ export function useMenu(restaurantId: number) {
     mutationFn: async ({ menuItemId, data }: { menuItemId: number; data: Partial<MenuItem> }) => {
       return apiRequest({
         method: 'PUT',
-        url: `/api/restaurants/${restaurantId}/menu/${menuItemId}`,
+        url: `/api/restaurants/${restaurantId}/menu-items/${menuItemId}`,
         data
       });
     },
@@ -70,7 +70,7 @@ export function useMenu(restaurantId: number) {
     mutationFn: async (menuItemId: number) => {
       return apiRequest({
         method: 'DELETE',
-        url: `/api/restaurants/${restaurantId}/menu/${menuItemId}`
+        url: `/api/restaurants/${restaurantId}/menu-items/${menuItemId}`
       });
     },
     onSuccess: () => {

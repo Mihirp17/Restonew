@@ -11,10 +11,11 @@ import {
   type AiInsight, type InsertAiInsight, aiInsights,
   type TableSession, type InsertTableSession, tableSessions,
   type Customer, type InsertCustomer, customers,
-  type Bill, type InsertBill, bills
+  type Bill, type InsertBill, bills,
+  type BillItem, type InsertBillItem, billItems
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, sql, lt, inArray } from "drizzle-orm";
 import bcrypt from 'bcryptjs';
 
 // Generic storage interface with all required methods
@@ -117,9 +118,11 @@ export interface IStorage {
   getBillByCustomerAndSession(customerId: number, tableSessionId: number): Promise<Bill | undefined>;
   createBill(bill: InsertBill): Promise<Bill>;
   updateBill(id: number, bill: Partial<InsertBill>): Promise<Bill | undefined>;
+  getBillItemsByBillId(billId: number): Promise<BillItem[]>;
+  createBillItem(billItem: InsertBillItem): Promise<BillItem>;
   checkAllCustomersBillsPaid(tableSessionId: number): Promise<boolean>;
   updateSessionPaymentProgress(tableSessionId: number): Promise<void>;
-  calculateSessionTotals(tableSessionId: number): Promise<void>;
+  calculateSessionTotals(tableSessionId: number, forceRefresh?: boolean): Promise<void>;
   invalidateSessionCache(tableSessionId: number): Promise<void>;
   syncTableOccupancy(restaurantId: number): Promise<void>;
 
@@ -131,6 +134,9 @@ export interface IStorage {
 
   // Count unique chat sessions for a restaurant in the last 24h
   countAiChatSessionsLast24h(restaurantId: number): Promise<number>;
+
+  // Session cleanup
+  cleanupAbandonedSessions(): Promise<number>;
 }
 
 // Mock menu items for test restaurant
@@ -431,9 +437,25 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getActiveOrdersByRestaurantId(restaurantId: number, limit?: number): Promise<Order[]> {
-    // Get orders that aren't completed or cancelled
-    return await db.select()
+    const activeOrders = await db.select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      status: orders.status,
+      total: orders.total,
+      createdAt: orders.createdAt,
+      customerName: customers.name,
+      tableNumber: tables.number,
+      customerId: orders.customerId,
+      tableSessionId: orders.tableSessionId,
+      restaurantId: orders.restaurantId,
+      tableId: orders.tableId,
+      notes: orders.notes,
+      isGroupOrder: orders.isGroupOrder,
+      updatedAt: orders.updatedAt
+    })
       .from(orders)
+      .leftJoin(customers, eq(orders.customerId, customers.id))
+      .leftJoin(tables, eq(orders.tableId, tables.id))
       .where(
         and(
           eq(orders.restaurantId, restaurantId),
@@ -441,7 +463,36 @@ export class DatabaseStorage implements IStorage {
         )
       )
       .orderBy(desc(orders.createdAt))
-      .limit(limit || 10); // Default to 10 if limit is not provided
+      .limit(limit || 10);
+
+    const enrichedOrders = await Promise.all(
+      activeOrders.map(async (order) => {
+        const items = await db.select({
+          id: orderItems.id,
+          quantity: orderItems.quantity,
+          price: orderItems.price,
+          orderId: orderItems.orderId,
+          menuItemId: orderItems.menuItemId,
+          createdAt: orderItems.createdAt,
+          updatedAt: orderItems.updatedAt,
+          menuItem: {
+            id: menuItems.id,
+            name: menuItems.name,
+            description: menuItems.description
+          }
+        })
+        .from(orderItems)
+        .leftJoin(menuItems, eq(orderItems.menuItemId, menuItems.id))
+        .where(eq(orderItems.orderId, order.id));
+        
+        return {
+          ...order,
+          items: items
+        };
+      })
+    );
+
+    return enrichedOrders as Order[];
   }
 
   async getActiveOrdersLightweight(restaurantId: number, limit?: number): Promise<{id: number, orderNumber: string, status: string, total: string, createdAt: Date, customerName?: string, tableNumber?: number}[]> {
@@ -526,6 +577,8 @@ export class DatabaseStorage implements IStorage {
     // Invalidate session cache when new order is created
     if (newOrder.tableSessionId) {
       await this.invalidateSessionCache(newOrder.tableSessionId);
+      // Calculate and update session totals immediately after order creation
+      await this.calculateSessionTotals(newOrder.tableSessionId);
     }
     
     return newOrder;
@@ -541,6 +594,8 @@ export class DatabaseStorage implements IStorage {
     // Invalidate session cache when order is updated
     if (updatedOrder?.tableSessionId) {
       await this.invalidateSessionCache(updatedOrder.tableSessionId);
+      // Calculate and update session totals immediately after order update
+      await this.calculateSessionTotals(updatedOrder.tableSessionId);
     }
     
     return updatedOrder;
@@ -565,10 +620,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createOrderItem(orderItem: InsertOrderItem): Promise<OrderItem> {
-    const [newOrderItem] = await db
-      .insert(orderItems)
-      .values(orderItem)
-      .returning();
+    const [newOrderItem] = await db.insert(orderItems).values(orderItem).returning();
+    
+    // Get the order to find the associated session
+    const orderData = await this.getOrder(orderItem.orderId);
+    if (orderData?.tableSessionId) {
+      // Recalculate session totals when new items are added
+      await this.invalidateSessionCache(orderData.tableSessionId);
+      await this.calculateSessionTotals(orderData.tableSessionId);
+    }
+    
     return newOrderItem;
   }
 
@@ -838,7 +899,7 @@ export class DatabaseStorage implements IStorage {
       sessions = await db.select().from(tableSessions).where(eq(tableSessions.restaurantId, restaurantId));
     }
 
-    // Enrich each session with customers and table data
+    // Enrich each session with customers, table data, and orders
     const enrichedSessions = await Promise.all(
       sessions.map(async (session) => {
         // Get customers for this session
@@ -847,10 +908,14 @@ export class DatabaseStorage implements IStorage {
         // Get table details
         const table = await this.getTable(session.tableId);
         
+        // Get orders for this session
+        const orders = await this.getOrdersByTableSessionId(session.id);
+        
         return {
           ...session,
           customers,
-          table
+          table,
+          orders
         };
       })
     );
@@ -942,7 +1007,7 @@ export class DatabaseStorage implements IStorage {
   async getBillsByTableSessionId(tableSessionId: number, limit: number = 30, offset: number = 0): Promise<Bill[]> {
     return await db.select().from(bills)
       .where(eq(bills.tableSessionId, tableSessionId))
-      .orderBy(bills.createdAt, 'desc')
+      .orderBy(desc(bills.createdAt))
       .limit(limit)
       .offset(offset);
   }
@@ -986,6 +1051,15 @@ export class DatabaseStorage implements IStorage {
     return updatedBill;
   }
 
+  async getBillItemsByBillId(billId: number): Promise<BillItem[]> {
+    return await db.select().from(billItems).where(eq(billItems.billId, billId));
+  }
+
+  async createBillItem(billItem: InsertBillItem): Promise<BillItem> {
+    const [newBillItem] = await db.insert(billItems).values(billItem).returning();
+    return newBillItem;
+  }
+
   async checkAllCustomersBillsPaid(tableSessionId: number): Promise<boolean> {
     // Get all customers in the session
     const customers = await this.getCustomersByTableSessionId(tableSessionId);
@@ -1027,16 +1101,18 @@ export class DatabaseStorage implements IStorage {
 
   // Cache for session totals to avoid recalculating frequently
   private sessionTotalsCache = new Map<number, { totals: { totalAmount: string, paidAmount: string }, lastUpdated: number }>();
-  private readonly CACHE_TTL = 30000; // 30 seconds cache TTL
+  private readonly CACHE_TTL = 10000; // Reduced to 10 seconds for more real-time updates
 
-  async calculateSessionTotals(tableSessionId: number): Promise<void> {
-    // Check cache first
-    const cached = this.sessionTotalsCache.get(tableSessionId);
-    const now = Date.now();
-    
-    if (cached && (now - cached.lastUpdated) < this.CACHE_TTL) {
-      console.log(`[Storage] Using cached session totals for session ${tableSessionId}`);
-      return;
+  async calculateSessionTotals(tableSessionId: number, forceRefresh: boolean = false): Promise<void> {
+    // Check cache first, unless forced refresh
+    if (!forceRefresh) {
+      const cached = this.sessionTotalsCache.get(tableSessionId);
+      const now = Date.now();
+      
+      if (cached && (now - cached.lastUpdated) < this.CACHE_TTL) {
+        console.log(`[Storage] Using cached session totals for session ${tableSessionId}`);
+        return;
+      }
     }
 
     // Get all orders for this session with a single optimized query
@@ -1062,15 +1138,33 @@ export class DatabaseStorage implements IStorage {
 
     // Update session with accurate totals only if changed
     const currentSession = await this.getTableSession(tableSessionId);
-    if (!currentSession || 
-        currentSession.totalAmount !== totals.totalAmount || 
+    if (!currentSession) {
+      return;
+    }
+    
+    if (currentSession.totalAmount !== totals.totalAmount || 
         currentSession.paidAmount !== totals.paidAmount) {
       
       await this.updateTableSession(tableSessionId, totals);
       console.log(`[Storage] Updated session ${tableSessionId} totals: ${totals.totalAmount} total, ${totals.paidAmount} paid`);
+      
+      // Broadcast session totals update to connected clients
+      if ((global as any).broadcastSessionUpdate && currentSession.restaurantId) {
+        try {
+          (global as any).broadcastSessionUpdate(
+            currentSession.restaurantId,
+            tableSessionId,
+            totals.totalAmount,
+            totals.paidAmount
+          );
+        } catch (error) {
+          console.error('[Storage] Error broadcasting session update:', error);
+        }
+      }
     }
 
     // Cache the result
+    const now = Date.now();
     this.sessionTotalsCache.set(tableSessionId, {
       totals,
       lastUpdated: now
@@ -1152,6 +1246,60 @@ export class DatabaseStorage implements IStorage {
       return parseInt(result[0].count, 10) || 0;
     }
     return 0;
+  }
+
+  async cleanupAbandonedSessions(): Promise<number> {
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+    
+    try {
+      const abandonedSessions = await db
+        .select()
+        .from(tableSessions)
+        .where(
+          and(
+            eq(tableSessions.status, 'waiting'),
+            lt(tableSessions.startTime, thirtyMinutesAgo)
+          )
+        );
+
+      if (abandonedSessions.length === 0) {
+        return 0;
+      }
+
+      const sessionIds = abandonedSessions.map((s) => s.id);
+      const ordersForSessions = await db
+        .select({ tableSessionId: orders.tableSessionId })
+        .from(orders)
+        .where(inArray(orders.tableSessionId, sessionIds));
+
+      const sessionsWithOrders = new Set(ordersForSessions.map((o) => o.tableSessionId));
+      
+      const trulyAbandonedSessionIds = abandonedSessions
+        .filter((session) => !sessionsWithOrders.has(session.id))
+        .map((session) => session.id);
+
+      if (trulyAbandonedSessionIds.length === 0) {
+        return 0;
+      }
+
+      const cleanupPromises = trulyAbandonedSessionIds.map(async (sessionId) => {
+        const session = abandonedSessions.find((s) => s.id === sessionId);
+        if (session) {
+          await this.updateTableSession(sessionId, { 
+            status: 'abandoned',
+            endTime: new Date()
+          });
+          
+          await this.updateTable(session.tableId, { isOccupied: false });
+        }
+      });
+
+      await Promise.all(cleanupPromises);
+      return trulyAbandonedSessionIds.length;
+    } catch (error) {
+      console.error('Error cleaning up abandoned sessions:', error);
+      return 0;
+    }
   }
 }
 

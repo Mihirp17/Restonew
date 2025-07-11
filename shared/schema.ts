@@ -77,7 +77,8 @@ export const tables = pgTable("tables", {
 }, (table) => ({
   restaurantIdIdx: index("tables_restaurant_id_idx").on(table.restaurantId),
   isOccupiedIdx: index("tables_is_occupied_idx").on(table.isOccupied),
-  numberIdx: index("tables_number_idx").on(table.number)
+  numberIdx: index("tables_number_idx").on(table.number),
+  uniqueTableNumber: unique("unique_table_number_per_restaurant").on(table.number, table.restaurantId)
 }));
 
 // Table Session Model - Represents a dining session for a table/group
@@ -88,14 +89,15 @@ export const tableSessions = pgTable("table_sessions", {
   groupId: integer("group_id").references(() => tableGroups.id), // For grouped tables
   sessionName: text("session_name"), // Optional name for the session
   partySize: integer("party_size").notNull(),
-  status: text("status").default("active").notNull(), // active, requesting_bill, completed, cancelled
+  status: text("status").default("waiting").notNull(), // waiting, active, bill_requested, completed, abandoned
   startTime: timestamp("start_time").defaultNow().notNull(),
+  firstOrderTime: timestamp("first_order_time"), // When session became active (first order placed)
   endTime: timestamp("end_time"),
   totalAmount: decimal("total_amount", { precision: 10, scale: 2 }).default("0.00").notNull(),
   paidAmount: decimal("paid_amount", { precision: 10, scale: 2 }).default("0.00").notNull(),
   billRequested: boolean("bill_requested").default(false).notNull(),
   billRequestedAt: timestamp("bill_requested_at"),
-  splitType: text("split_type").default("individual").notNull(), // individual, combined, custom
+  splitType: text("split_type").default("individual").notNull(), // individual, split_evenly, combined
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull()
 }, (table) => ({

@@ -20,6 +20,17 @@ interface OrderType {
   customerName?: string;
   tableNumber?: number;
   groupId?: number;
+  items?: Array<{
+    id: number;
+    quantity: number;
+    price: string;
+    menuItemId: number;
+    menuItem?: {
+      id: number;
+      name: string;
+      description?: string;
+    };
+  }>;
 }
 
 // Memoized order card component to prevent unnecessary re-renders
@@ -98,6 +109,22 @@ const OrderCard = memo(({
               <span className="text-xs font-medium text-gray-900 dark:text-white">Table {order.tableNumber}</span>
             </div>
           )}
+          
+          {/* Dish Names */}
+          {order.items && order.items.length > 0 && (
+            <div className="mb-2">
+              <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Items:</span>
+              <div className="text-xs text-gray-700 dark:text-gray-300 mt-1">
+                {order.items.map((item: any, index: number) => (
+                  <div key={index} className="flex justify-between">
+                    <span>{item.quantity}× {item.menuItem?.name || `Item #${item.menuItemId}`}</span>
+                    <span>${parseFloat(item.price || '0').toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
           <div className="flex justify-between">
             <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Total:</span>
             <span className="text-xs font-medium text-gray-900 dark:text-white">${formattedTotal}</span>
@@ -130,9 +157,9 @@ OrderCard.displayName = 'OrderCard';
 
 export const LiveOrders = memo(({ restaurantId }: LiveOrdersProps) => {
   const { activeOrders, updateOrderStatus, isLoading } = useOrders(restaurantId || 0, { 
-    lightweight: true, 
+    lightweight: false, 
     limit: 10 
-  }) as { activeOrders: OrderType[]; updateOrderStatus: (args: { orderId: number; status: OrderType['status'] }) => Promise<void>; isLoading: boolean };
+  });
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { t } = useLang();
@@ -143,10 +170,10 @@ export const LiveOrders = memo(({ restaurantId }: LiveOrdersProps) => {
   // Handle order status update
   const handleUpdateStatus = useCallback(async (
     orderId: number,
-    status: OrderType['status']
+    status: string
   ) => {
     try {
-      await updateOrderStatus({ orderId, status });
+      await updateOrderStatus({ orderId, status: status as OrderType['status'] });
       
       // NOTE: Removed automatic table status update on order completion
       // Tables should only be marked as vacant when all bills are paid,

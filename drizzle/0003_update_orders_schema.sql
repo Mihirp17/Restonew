@@ -29,38 +29,19 @@ BEGIN
         ALTER TABLE orders DROP CONSTRAINT orders_table_session_id_table_sessions_id_fk;
     END IF;
 
-    -- Make customerId nullable (handle type casting properly)
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'orders' AND column_name = 'customer_id' 
-        AND is_nullable = 'NO'
-    ) THEN
-        -- First set any invalid values to NULL
-        UPDATE orders SET customer_id = NULL WHERE customer_id::text !~ '^[0-9]+$';
-        -- Then make the column nullable
-        ALTER TABLE orders ALTER COLUMN customer_id DROP NOT NULL;
-    END IF;
+    -- Ensure customerId and tableSessionId are NOT NULL to align with shared/schema.ts
+    ALTER TABLE orders
+        ALTER COLUMN customer_id SET NOT NULL,
+        ALTER COLUMN table_session_id SET NOT NULL;
 
-    -- Make tableSessionId nullable (handle type casting properly)
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'orders' AND column_name = 'table_session_id' 
-        AND is_nullable = 'NO'
-    ) THEN
-        -- First set any invalid values to NULL
-        UPDATE orders SET table_session_id = NULL WHERE table_session_id::text !~ '^[0-9]+$';
-        -- Then make the column nullable
-        ALTER TABLE orders ALTER COLUMN table_session_id DROP NOT NULL;
-    END IF;
-
-    -- Re-add foreign key constraints as optional
+    -- Re-add foreign key constraints
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.table_constraints 
         WHERE constraint_name = 'orders_customer_id_customers_id_fk' 
         AND table_name = 'orders'
     ) THEN
         ALTER TABLE orders ADD CONSTRAINT orders_customer_id_customers_id_fk 
-        FOREIGN KEY (customer_id) REFERENCES customers(id);
+        FOREIGN KEY (customer_id) REFERENCES customers(id) NOT DEFERRABLE;
     END IF;
 
     IF NOT EXISTS (
@@ -69,9 +50,9 @@ BEGIN
         AND table_name = 'orders'
     ) THEN
         ALTER TABLE orders ADD CONSTRAINT orders_table_session_id_table_sessions_id_fk 
-        FOREIGN KEY (table_session_id) REFERENCES table_sessions(id);
+        FOREIGN KEY (table_session_id) REFERENCES table_sessions(id) NOT DEFERRABLE;
     END IF;
 
 END $$;
 
-COMMIT; 
+COMMIT;

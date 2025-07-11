@@ -50,8 +50,11 @@ export default function Dashboard() {
   const { t, isLoading: langLoading } = useLang();
   const restaurantId = user?.restaurantId;
   const { toast } = useToast();
-  const { tables: rawTables = [], isLoading: isTablesLoading } = useTables(restaurantId!);
+  
+  // Only call useTables when restaurantId is available
+  const { tables: rawTables = [], isLoading: isTablesLoading } = useTables(restaurantId || 0);
   const tables: Table[] = Array.isArray(rawTables) ? rawTables : [];
+  
   const [dateRange, setDateRange] = useState<'today' | 'week' | 'month'>('today');
   const [stats, setStats] = useState({
     orderCount: 0,
@@ -76,11 +79,32 @@ export default function Dashboard() {
     return getRelativeDateRange(dateRange);
   }, [dateRange]);
 
-  // Connect to WebSocket for real-time updates
-  const { addEventListener } = useSocket(restaurantId);
+  // Only connect to WebSocket when restaurantId is available
+  const socketProps = useSocket(restaurantId && restaurantId > 0 ? restaurantId : null);
   
-  // Listen for waiter requests
+  // Early return if user data is still loading or restaurantId is not available
+  if (!user || !restaurantId) {
+    return (
+      <Layout
+        title={t("dashboard", "Dashboard")}
+        description={t("dashboardDescription", "Overview of your restaurant performance")}
+        requireAuth
+        allowedRoles={['restaurant']}
+      >
+        <div className="flex items-center justify-center h-64">
+          <div className="text-center">
+            <div className="animate-spin w-8 h-8 border-2 border-gray-300 border-t-red-600 rounded-full mx-auto mb-2"></div>
+            <p className="text-gray-500">{t("loading", "Loading restaurant data...")}</p>
+          </div>
+        </div>
+      </Layout>
+    );
+  }
+  
+  // Listen for waiter requests - only when socket is available
   useEffect(() => {
+    if (!socketProps?.addEventListener) return;
+    
     const handleWaiterRequest = (request: WaiterRequest) => {
       // Add new request to the list
       setWaiterRequests(prev => [request, ...prev]);
@@ -94,18 +118,20 @@ export default function Dashboard() {
       });
       
       // Play notification sound
-      const audio = new Audio('/notification.mp3');
-      audio.play().catch(e => console.log('Error playing notification sound', e));
+      try {
+        const audio = new Audio('/notification.mp3');
+        audio.play().catch(e => console.log('Error playing notification sound', e));
+      } catch (e) {
+        console.log('Notification sound not available');
+      }
     };
     
     // Register event listener
-    addEventListener('waiter-requested', handleWaiterRequest);
+    const unsubscribe = socketProps.addEventListener('waiter-requested', handleWaiterRequest);
     
     // Cleanup
-    return () => {
-      // No need to remove event listener, this is handled by the useSocket hook cleanup
-    };
-  }, [addEventListener, toast]);
+    return unsubscribe;
+  }, [socketProps?.addEventListener, toast]);
 
   useEffect(() => {
     const fetchStats = async () => {
@@ -162,7 +188,10 @@ export default function Dashboard() {
           tableId: selectedTableId,
           sessionName: sessionData.sessionName,
           partySize: sessionData.partySize,
-          splitType: sessionData.splitType
+          splitType: sessionData.splitType,
+          status: 'waiting',
+          totalAmount: "0.00",
+          paidAmount: "0.00"
         }
       });
 
@@ -382,7 +411,7 @@ export default function Dashboard() {
         </div>
 
         {/* AI Insights Section */}
-        <NewAIInsights restaurantId={restaurantId} />
+        {restaurantId && <NewAIInsights restaurantId={restaurantId} />}
       </div>
 
       {/* Waiter Request Details Dialog */}
