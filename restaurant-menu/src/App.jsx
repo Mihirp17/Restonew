@@ -4,6 +4,7 @@ import CartModal from "./components/CartModal";
 import MenuItemCard from "./components/MenuItemCard";
 import CategoryTabs from "./components/CategoryTabs";
 import OrderPlacedBill from "./components/OrderPlacedBill";
+import { sendBillRequest } from "./lib/ws";
 
 function QRMessage() {
   return (
@@ -83,6 +84,7 @@ function MenuUI() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [step, setStep] = useState("landing"); // landing or menu
+  const [billRequested, setBillRequested] = useState(false);
 
   // After user info is submitted, create session and fetch menu
   useEffect(() => {
@@ -182,7 +184,13 @@ function MenuUI() {
   };
 
   const handleRequestBill = () => {
-    alert('Waiter will come to your table with the bill!');
+    sendBillRequest({
+      restaurantId,
+      tableId,
+      customerName: userInfo?.name || "Guest",
+    });
+    setBillRequested(true);
+    setTimeout(() => setBillRequested(false), 3000);
   };
 
   if (loading) return <div className="flex min-h-screen items-center justify-center text-lg">Loading...</div>;
@@ -226,7 +234,14 @@ function MenuUI() {
       )}
       {/* Order Placed & Request Bill */}
       {orderPlaced && (
-        <OrderPlacedBill onRequestBill={handleRequestBill} />
+        <>
+          <OrderPlacedBill onRequestBill={handleRequestBill} />
+          {billRequested && (
+            <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-green-600 text-white px-6 py-3 rounded-full font-bold shadow-lg z-50 animate-in slide-in-from-bottom">
+              Bill requested! A staff member will assist you soon.
+            </div>
+          )}
+        </>
       )}
     </div>
   );
