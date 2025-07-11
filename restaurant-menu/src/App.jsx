@@ -2,6 +2,7 @@ import { useState } from "react";
 import CartModal from "./components/CartModal";
 import MenuItemCard from "./components/MenuItemCard";
 import CategoryTabs from "./components/CategoryTabs";
+import OrderPlacedBill from "./components/OrderPlacedBill";
 
 const mockCategories = ["Sushi", "Rolls", "Sashimi", "Drinks"];
 const mockMenu = [
@@ -94,6 +95,10 @@ function MenuUI({ user }) {
     setCart([]);
   };
 
+  const handleRequestBill = () => {
+    alert('Waiter will come to your table with the bill!');
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 pb-24">
       <div className="sticky top-0 z-10 bg-white py-3 shadow-sm">
@@ -128,15 +133,7 @@ function MenuUI({ user }) {
       )}
       {/* Order Placed & Request Bill */}
       {orderPlaced && (
-        <div className="fixed bottom-0 left-0 w-full bg-green-50 border-t border-green-200 p-6 flex flex-col items-center z-50 animate-in slide-in-from-bottom">
-          <div className="text-green-700 font-bold text-lg mb-2">Order Placed!</div>
-          <button
-            className="bg-green-600 text-white px-6 py-3 rounded-full font-bold text-lg mt-2 shadow hover:bg-green-700"
-            onClick={() => alert('Waiter will come to your table with the bill!')}
-          >
-            Request Bill
-          </button>
-        </div>
+        <OrderPlacedBill onRequestBill={handleRequestBill} />
       )}
     </div>
   );
