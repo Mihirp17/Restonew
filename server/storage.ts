@@ -14,7 +14,7 @@ import {
   type Bill, type InsertBill, bills
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, sql, inArray, innerJoin } from "drizzle-orm";
 import bcrypt from 'bcryptjs';
 
 // Generic storage interface with all required methods
@@ -62,6 +62,8 @@ export interface IStorage {
   createOrder(order: InsertOrder): Promise<Order>;
   updateOrder(id: number, order: Partial<InsertOrder>): Promise<Order | undefined>;
   deleteOrder(id: number): Promise<boolean>;
+  getOrdersByCustomerId(customerId: number): Promise<Order[]>;
+  getOrdersByTableSessionId(tableSessionId: number): Promise<Order[]>;
   
   // OrderItem Methods
   getOrderItem(id: number): Promise<OrderItem | undefined>;
@@ -92,9 +94,9 @@ export interface IStorage {
   // updateRestaurantStripeInfo removed - placeholder implementation
   
   // AI Insights methods
-  getAiInsightsByRestaurantId(restaurantId: number): Promise<any[]>;
-  createAiInsight(insight: any): Promise<any>;
-  updateAiInsight(insightId: number, updates: any): Promise<any>;
+  getAiInsightsByRestaurantId(restaurantId: number): Promise<AIInsight[]>;
+  createAiInsight(insight: InsertAIInsight): Promise<AIInsight>;
+  updateAiInsight(insightId: number, updates: Partial<InsertAIInsight>): Promise<AIInsight>;
   markAiInsightAsRead(insightId: number): Promise<void>;
   updateAiInsightStatus(insightId: number, status: string): Promise<void>;
 
@@ -122,6 +124,7 @@ export interface IStorage {
   calculateSessionTotals(tableSessionId: number): Promise<void>;
   invalidateSessionCache(tableSessionId: number): Promise<void>;
   syncTableOccupancy(restaurantId: number): Promise<void>;
+  cleanupEmptySessions(timeoutMinutes: number): Promise<{ removedSessions: number, removedCustomers: number }>;
 
   // Mock menu items for test restaurant
   getMenuItems(restaurantId: number): Promise<MenuItem[]>;
@@ -444,11 +447,14 @@ export class DatabaseStorage implements IStorage {
       .limit(limit || 10); // Default to 10 if limit is not provided
   }
 
-  async getActiveOrdersLightweight(restaurantId: number, limit?: number): Promise<{id: number, orderNumber: string, status: string, total: string, createdAt: Date, customerName?: string, tableNumber?: number}[]> {
+  async getActiveOrdersLightweight(restaurantId: number, limit?: number): Promise<any[]> {
     try {
+      console.log('Storage: getActiveOrdersLightweight called with:', { restaurantId, limit });
+      
       const result = await db.select({
         id: orders.id,
         orderNumber: orders.orderNumber,
+        displayOrderNumber: orders.displayOrderNumber,
         status: orders.status,
         total: orders.total,
         createdAt: orders.createdAt,
@@ -467,15 +473,44 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(orders.createdAt))
       .limit(limit || 10);
 
-      return result.map(row => ({
+      console.log('Storage: Found orders:', result.length);
+
+      // For each order, fetch its items with menu item details
+      const ordersWithItems = await Promise.all(result.map(async (row) => {
+        const items = await db.select({
+          id: orderItems.id,
+          quantity: orderItems.quantity,
+          price: orderItems.price,
+          menuItemId: orderItems.menuItemId,
+          menuItemName: menuItems.name
+        })
+        .from(orderItems)
+        .leftJoin(menuItems, eq(orderItems.menuItemId, menuItems.id))
+        .where(eq(orderItems.orderId, row.id));
+        
+        console.log(`Storage: Order ${row.id} has ${items.length} items`);
+        
+        return {
         id: Number(row.id),
         orderNumber: String(row.orderNumber),
+          displayOrderNumber: row.displayOrderNumber ? Number(row.displayOrderNumber) : undefined,
         status: String(row.status),
         total: String(row.total),
         createdAt: new Date(row.createdAt),
         customerName: row.customerName ? String(row.customerName) : undefined,
-        tableNumber: row.tableNumber ? Number(row.tableNumber) : undefined
+          tableNumber: row.tableNumber ? Number(row.tableNumber) : undefined,
+          items: items.map(item => ({
+            id: Number(item.id),
+            quantity: Number(item.quantity),
+            price: String(item.price),
+            menuItemId: Number(item.menuItemId),
+            menuItemName: String(item.menuItemName)
+          }))
+        };
       }));
+
+      console.log('Storage: Returning orders with items:', ordersWithItems.length);
+      return ordersWithItems;
     } catch (error) {
       console.error('Error in getActiveOrdersLightweight:', error);
       return [];
@@ -520,8 +555,48 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  // Generate a sequential display order number per restaurant
+  private async generateSequentialDisplayOrderNumber(restaurantId: number): Promise<number> {
+    // Get the max displayOrderNumber for this restaurant
+    const result = await db.select({ max: sql<number>`MAX(${orders.displayOrderNumber})` })
+      .from(orders)
+      .where(eq(orders.restaurantId, restaurantId));
+    const maxNumber = result[0]?.max || 0;
+    return maxNumber + 1;
+  }
+
   async createOrder(order: InsertOrder): Promise<Order> {
-    const [newOrder] = await db.insert(orders).values(order).returning();
+    // Validate session and customer exist and are active
+    const session = await this.getTableSession(order.tableSessionId);
+    if (!session) {
+      throw new Error(`Table session ${order.tableSessionId} not found`);
+    }
+    
+    if (!['waiting', 'active'].includes(session.status)) {
+      throw new Error(`Cannot create order for session with status: ${session.status}`);
+    }
+
+    const customer = await this.getCustomer(order.customerId);
+    if (!customer) {
+      throw new Error(`Customer ${order.customerId} not found`);
+    }
+
+    if (customer.tableSessionId !== order.tableSessionId) {
+      throw new Error(`Customer ${order.customerId} does not belong to session ${order.tableSessionId}`);
+    }
+
+    // Generate unique order number
+    const orderNumber = await this.generateUniqueOrderNumber(order.restaurantId);
+    // Generate sequential display order number
+    const displayOrderNumber = await this.generateSequentialDisplayOrderNumber(order.restaurantId);
+
+    const [newOrder] = await db.insert(orders).values({
+      ...order,
+      orderNumber,
+      displayOrderNumber,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }).returning();
     
     // Invalidate session cache when new order is created
     if (newOrder.tableSessionId) {
@@ -529,6 +604,26 @@ export class DatabaseStorage implements IStorage {
     }
     
     return newOrder;
+  }
+
+  private async generateUniqueOrderNumber(restaurantId: number): Promise<string> {
+    const timestamp = Date.now().toString().slice(-8);
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    const orderNumber = `R${restaurantId}-${timestamp}-${random}`;
+    
+    // Check if order number already exists (very unlikely but safe)
+    const existingOrder = await db
+      .select()
+      .from(orders)
+      .where(eq(orders.orderNumber, orderNumber))
+      .limit(1);
+    
+    if (existingOrder.length > 0) {
+      // Retry with different random number
+      return this.generateUniqueOrderNumber(restaurantId);
+    }
+    
+    return orderNumber;
   }
 
   async updateOrder(id: number, order: Partial<InsertOrder>): Promise<Order | undefined> {
@@ -586,6 +681,15 @@ export class DatabaseStorage implements IStorage {
       .from(orderItems)
       .innerJoin(orders, eq(orderItems.orderId, orders.id))
       .where(eq(orders.restaurantId, restaurantId));
+  }
+
+  async batchCreateOrderItems(orderItemsArray: InsertOrderItem[]): Promise<OrderItem[]> {
+    if (!orderItemsArray || orderItemsArray.length === 0) return [];
+    const inserted = await db
+      .insert(orderItems)
+      .values(orderItemsArray)
+      .returning();
+    return inserted;
   }
 
   // User Methods
@@ -730,12 +834,17 @@ export class DatabaseStorage implements IStorage {
     const { startDate, endDate } = options;
     
     try {
-      const conditions = [eq(menuItems.restaurantId, restaurantId)];
-      if (startDate && endDate) {
-        conditions.push(sql`${orders.createdAt} BETWEEN ${startDate} AND ${endDate}`);
+      console.log('Storage: getPopularMenuItems called with:', { restaurantId, limit, startDate, endDate });
+      
+      // Debug: Check if there are any orders in the database
+      const allOrders = await db.select().from(orders).where(eq(orders.restaurantId, restaurantId));
+      console.log('Storage: Total orders in database for restaurant:', allOrders.length);
+      if (allOrders.length > 0) {
+        console.log('Storage: Sample order dates:', allOrders.slice(0, 3).map(o => ({ id: o.id, createdAt: o.createdAt, status: o.status })));
       }
 
-      const result = await db.select({
+      const conditions = [eq(menuItems.restaurantId, restaurantId)];
+      let query = db.select({
         id: menuItems.id,
         name: menuItems.name,
         price: menuItems.price,
@@ -743,13 +852,32 @@ export class DatabaseStorage implements IStorage {
       })
       .from(menuItems)
       .leftJoin(orderItems, sql`${menuItems.id} = ${orderItems.menuItemId}`)
-      .leftJoin(orders, sql`${orderItems.orderId} = ${orders.id} AND ${orders.status} != 'cancelled'`)
+      .leftJoin(orders, sql`${orderItems.orderId} = ${orders.id} AND ${orders.status} != 'cancelled'`);
+
+      // Add date filtering condition if dates are provided
+      if (startDate && endDate) {
+        console.log('Storage: Applying date filter:', { startDate, endDate });
+        conditions.push(sql`${orders.createdAt} BETWEEN ${startDate.toISOString()} AND ${endDate.toISOString()}`);
+      } else {
+        console.log('Storage: No date filter applied');
+      }
+
+      const result = await query
       .where(and(...conditions as any))
       .groupBy(menuItems.id, menuItems.name, menuItems.price)
       .orderBy(desc(sql`COUNT(${orderItems.id})`))
       .limit(limit);
       
-      return result.map(row => ({
+      console.log('Storage: Query result:', result);
+      
+      // Filter out items with 0 orders when date filtering is applied
+      const filteredResult = startDate && endDate 
+        ? result.filter(row => Number(row.count) > 0)
+        : result;
+      
+      console.log('Storage: Filtered result:', filteredResult);
+      
+      return filteredResult.map(row => ({
         id: Number(row.id),
         name: String(row.name),
         count: Number(row.count || 0),
@@ -775,7 +903,7 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async createAiInsight(insight: any): Promise<any> {
+  async createAiInsight(insight: InsertAIInsight): Promise<AIInsight> {
     try {
       const result = await db.insert(aiInsights).values({
         restaurantId: insight.restaurantId,
@@ -796,7 +924,7 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async updateAiInsight(insightId: number, updates: any): Promise<any> {
+  async updateAiInsight(insightId: number, updates: Partial<InsertAIInsight>): Promise<AIInsight> {
     try {
       const result = await db
         .update(aiInsights)
@@ -859,11 +987,43 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createTableSession(session: InsertTableSession): Promise<TableSession> {
-    const [newSession] = await db
+    // Use transaction to ensure atomicity and prevent race conditions
+    return await db.transaction(async (tx) => {
+      // Check for existing active session with proper locking
+      const existingSession = await tx
+        .select()
+        .from(tableSessions)
+        .where(
+          and(
+            eq(tableSessions.tableId, session.tableId),
+            eq(tableSessions.restaurantId, session.restaurantId),
+            inArray(tableSessions.status, ['waiting', 'active'])
+          )
+        )
+        .limit(1);
+
+      if (existingSession.length > 0) {
+        throw new Error(`Table ${session.tableNumber} already has an active session`);
+      }
+
+      // Create session with optimistic locking
+      const [newSession] = await tx
       .insert(tableSessions)
-      .values(session)
+        .values({
+          ...session,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
       .returning();
+
+      // Update table occupancy status
+      await tx
+        .update(tables)
+        .set({ isOccupied: true, updatedAt: new Date() })
+        .where(eq(tables.id, session.tableId));
+
     return newSession;
+    });
   }
 
   async updateTableSession(id: number, session: Partial<InsertTableSession>): Promise<TableSession | undefined> {
@@ -881,12 +1041,39 @@ export class DatabaseStorage implements IStorage {
       sanitizedSession.startTime = new Date(sanitizedSession.startTime);
     }
 
+    // Validate status transitions
+    if (sanitizedSession.status) {
+      const currentSession = await this.getTableSession(id);
+      if (currentSession) {
+        const validTransitions = this.getValidStatusTransitions(currentSession.status);
+        if (!validTransitions.includes(sanitizedSession.status)) {
+          throw new Error(`Invalid status transition from ${currentSession.status} to ${sanitizedSession.status}`);
+        }
+      }
+    }
+
     const [updatedSession] = await db
       .update(tableSessions)
       .set({ ...sanitizedSession, updatedAt: new Date() })
       .where(eq(tableSessions.id, id))
       .returning();
+
+    // Update table occupancy if session status changed
+    if (updatedSession && sanitizedSession.status) {
+      await this.syncTableOccupancy(updatedSession.restaurantId);
+    }
+
     return updatedSession;
+  }
+
+  private getValidStatusTransitions(currentStatus: string): string[] {
+    const transitions: Record<string, string[]> = {
+      'waiting': ['active', 'cancelled'],
+      'active': ['completed', 'cancelled'],
+      'completed': [], // Terminal state
+      'cancelled': []  // Terminal state
+    };
+    return transitions[currentStatus] || [];
   }
   
   // Customer Methods
@@ -900,9 +1087,23 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createCustomer(customer: InsertCustomer): Promise<Customer> {
+    // Validate that the session exists and is active
+    const session = await this.getTableSession(customer.tableSessionId);
+    if (!session) {
+      throw new Error(`Table session ${customer.tableSessionId} not found`);
+    }
+    
+    if (!['waiting', 'active'].includes(session.status)) {
+      throw new Error(`Cannot add customer to session with status: ${session.status}`);
+    }
+
     const [newCustomer] = await db
       .insert(customers)
-      .values(customer)
+      .values({
+        ...customer,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
       .returning();
     return newCustomer;
   }
@@ -942,7 +1143,7 @@ export class DatabaseStorage implements IStorage {
   async getBillsByTableSessionId(tableSessionId: number, limit: number = 30, offset: number = 0): Promise<Bill[]> {
     return await db.select().from(bills)
       .where(eq(bills.tableSessionId, tableSessionId))
-      .orderBy(bills.createdAt, 'desc')
+      .orderBy(desc(bills.createdAt))
       .limit(limit)
       .offset(offset);
   }
@@ -956,11 +1157,71 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createBill(bill: InsertBill): Promise<Bill> {
+    // Validate session exists and is active
+    const session = await this.getTableSession(bill.tableSessionId);
+    if (!session) {
+      throw new Error(`Table session ${bill.tableSessionId} not found`);
+    }
+    
+    if (!['waiting', 'active'].includes(session.status)) {
+      throw new Error(`Cannot create bill for session with status: ${session.status}`);
+    }
+
+    // Validate customer if individual bill
+    if (bill.customerId) {
+      const customer = await this.getCustomer(bill.customerId);
+      if (!customer) {
+        throw new Error(`Customer ${bill.customerId} not found`);
+      }
+      
+      if (customer.tableSessionId !== bill.tableSessionId) {
+        throw new Error(`Customer ${bill.customerId} does not belong to session ${bill.tableSessionId}`);
+      }
+
+      // Check if customer already has a bill for this session
+      const existingBill = await this.getBillByCustomerAndSession(bill.customerId, bill.tableSessionId);
+      if (existingBill) {
+        throw new Error(`Customer ${bill.customerId} already has a bill for session ${bill.tableSessionId}`);
+      }
+    }
+
+    // Generate unique bill number
+    const billNumber = await this.generateUniqueBillNumber(bill.tableSessionId);
+
     const [newBill] = await db
       .insert(bills)
-      .values(bill)
+      .values({
+        ...bill,
+        billNumber,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
       .returning();
+
+    // Invalidate session cache when new bill is created
+    await this.invalidateSessionCache(bill.tableSessionId);
+
     return newBill;
+  }
+
+  private async generateUniqueBillNumber(tableSessionId: number): Promise<string> {
+    const timestamp = Date.now().toString().slice(-8);
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    const billNumber = `B${tableSessionId}-${timestamp}-${random}`;
+    
+    // Check if bill number already exists
+    const existingBill = await db
+      .select()
+      .from(bills)
+      .where(eq(bills.billNumber, billNumber))
+      .limit(1);
+    
+    if (existingBill.length > 0) {
+      // Retry with different random number
+      return this.generateUniqueBillNumber(tableSessionId);
+    }
+    
+    return billNumber;
   }
 
   async updateBill(id: number, bill: Partial<InsertBill>): Promise<Bill | undefined> {
@@ -1104,8 +1365,46 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  async getOrdersByCustomerId(customerId: number): Promise<Order[]> {
+    return await db.select().from(orders).where(eq(orders.customerId, customerId));
+  }
+
   async getOrdersByTableSessionId(tableSessionId: number): Promise<Order[]> {
     return await db.select().from(orders).where(eq(orders.tableSessionId, tableSessionId));
+  }
+
+  async cleanupEmptySessions(timeoutMinutes: number = 30): Promise<{ removedSessions: number, removedCustomers: number }> {
+    const now = new Date();
+    const sessions = await db.select().from(tableSessions).where(inArray(tableSessions.status, ['waiting', 'active']));
+    let removedSessions = 0;
+    let removedCustomers = 0;
+    for (const session of sessions) {
+      const sessionAgeMinutes = (now.getTime() - new Date(session.createdAt).getTime()) / 60000;
+      if (sessionAgeMinutes > timeoutMinutes) {
+        // Check if any orders exist for this session
+        const sessionOrders = await db.select().from(orders).where(eq(orders.tableSessionId, session.id));
+        if (sessionOrders.length === 0) {
+          // Remove all customers for this session
+          const sessionCustomers = await db.select().from(customers).where(eq(customers.tableSessionId, session.id));
+          removedCustomers += sessionCustomers.length;
+          await db.delete(customers).where(eq(customers.tableSessionId, session.id));
+          // Remove the session
+          await db.delete(tableSessions).where(eq(tableSessions.id, session.id));
+          removedSessions++;
+        } else {
+          // Remove ghost customers (never ordered)
+          const sessionCustomers = await db.select().from(customers).where(eq(customers.tableSessionId, session.id));
+          for (const customer of sessionCustomers) {
+            const customerOrders = await db.select().from(orders).where(eq(orders.customerId, customer.id));
+            if (customerOrders.length === 0) {
+              await db.delete(customers).where(eq(customers.id, customer.id));
+              removedCustomers++;
+            }
+          }
+        }
+      }
+    }
+    return { removedSessions, removedCustomers };
   }
 
   // Mock menu items for test restaurant

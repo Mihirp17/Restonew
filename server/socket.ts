@@ -43,7 +43,7 @@ export interface OrderStatusUpdate {
 
 export interface NewOrder {
   restaurantId: number;
-  order: any;
+  order: Order;
 }
 
 export interface WaiterRequest {

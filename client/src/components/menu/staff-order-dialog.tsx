@@ -32,6 +32,7 @@ interface TableSession {
   partySize: number;
   splitType: string;
   customers: Customer[];
+  totalAmount?: number | string; // Added for totalAmount
 }
 
 interface StaffOrderDialogProps {
@@ -224,7 +225,7 @@ export function StaffOrderDialog({
       if (tableSession) {
         // Create orders for each customer
         const customerOrders = getCartByCustomer();
-        
+        let cartTotal = 0;
         for (const [customerIdStr, items] of Object.entries(customerOrders)) {
           if (items.length === 0) continue;
           
@@ -244,19 +245,21 @@ export function StaffOrderDialog({
           const orderTotal = items.reduce((total, item) => 
             total + (parseFloat(item.price) * item.quantity), 0
           );
+          cartTotal += orderTotal;
 
           // Generate order number
           const orderNumber = `T${selectedTableId}-${Date.now()}-${customerId}`;
 
-          const orderData = {
+          // Place the order (type-safe)
+          await createOrder({
             customerId,
             tableSessionId: tableSession.id,
-            orderNumber,
             tableId: selectedTableId,
             restaurantId,
-            status: "pending" as const,
-            total: orderTotal.toString(),
-            notes: orderNotes.trim() || undefined,
+            orderNumber,
+            status: "pending",
+            total: orderTotal.toFixed(2),
+            notes: orderNotes,
             isGroupOrder: false,
             items: items.map(item => ({
               menuItemId: item.id,
@@ -264,25 +267,17 @@ export function StaffOrderDialog({
               price: item.price,
               customizations: item.customizations || undefined
             }))
-          };
-
-          const response = await apiRequest({
-            method: 'POST',
-            url: `/api/restaurants/${restaurantId}/orders`,
-            data: orderData
           });
-          if (!response) {
-            throw new Error(`Failed to create order for ${customer.name}`);
-          }
         }
 
         // Update table session total
-        // TODO: Fix TypeScript issue with totalAmount property
-        // const currentTotal = parseFloat(tableSession.totalAmount?.toString() || '0');
-        // await apiRequest('PUT', `/api/restaurants/${restaurantId}/table-sessions/${tableSession.id}`, {
-        //   totalAmount: (currentTotal + cartTotal).toString()
-        // });
-
+        // Fix TypeScript issue with totalAmount property
+        if (typeof tableSession.totalAmount === 'string' || typeof tableSession.totalAmount === 'number') {
+          const currentTotal = parseFloat(tableSession.totalAmount?.toString() || '0');
+          await apiRequest('PUT', `/api/restaurants/${restaurantId}/table-sessions/${tableSession.id}`, {
+            totalAmount: (currentTotal + cartTotal).toString()
+          });
+        }
       } else {
         // Legacy order creation
         await apiRequest({

@@ -4,7 +4,8 @@ import { useAuth } from "@/hooks/use-auth";
 import { useOrders } from "@/hooks/use-orders";
 import { useMenu } from "@/hooks/use-menu";
 import { useLang } from "@/contexts/language-context";
-import { OrderItem } from "@/components/orders/order-item";
+import { OrderItem as OrderItemComponent } from "@/components/orders/order-item";
+import type { Order, OrderItem } from "@/hooks/use-orders";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
@@ -75,7 +76,7 @@ export default function Orders() {
   useEffect(() => {
     if (!restaurantId || !addEventListener) return;
     
-    const handleNewOrder = (orderData: any) => {
+    const handleNewOrder = (orderData: { customerName?: string; tableId?: number }) => {
       try {
         // Play notification sound
         const audio = new Audio('/notification.mp3');
@@ -131,7 +132,7 @@ export default function Orders() {
     }
   }, [searchTerm, activeTab, orders, activeOrders]);
 
-  const handleViewOrder = (order: any) => {
+  const handleViewOrder = (order: Order) => {
     setSelectedOrder(order);
     setIsDetailDialogOpen(true);
   };
@@ -161,19 +162,19 @@ export default function Orders() {
     }
   };
 
-  const handleEditOrder = (order: any) => {
+  const handleEditOrder = (order: Order) => {
     setSelectedOrder(order);
-    setEditingOrderItems((order.items || []).map((item: any) => ({
+    setEditingOrderItems((order.items || []).map((item: OrderItem) => ({
       ...item,
       menuItemId: item.menuItemId,
       quantity: item.quantity,
       price: item.price,
-      customizations: item.customizations || ""
+      customizations: (item as any).customizations || ""
     })));
     setIsEditDialogOpen(true);
   };
 
-  const handleDeleteOrder = (order: any) => {
+  const handleDeleteOrder = (order: Order) => {
     setSelectedOrder(order);
     setIsDeleteDialogOpen(true);
   };
@@ -343,7 +344,7 @@ export default function Orders() {
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">{order.items?.length || 0} items</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">${parseFloat(order.total).toFixed(2)}</td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <OrderItem.StatusBadge status={order.status} />
+                        <OrderItemComponent.StatusBadge status={order.status} />
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                         {calculateTimeAgo(order.createdAt)}
@@ -420,7 +421,7 @@ export default function Orders() {
               
               <div className="flex justify-between items-center">
                 <span className="text-sm text-gray-500 dark:text-gray-400">Status</span>
-                <OrderItem.StatusBadge status={selectedOrder.status} />
+                <OrderItemComponent.StatusBadge status={selectedOrder.status} />
               </div>
               
               <div className="flex justify-between items-center">

@@ -168,6 +168,17 @@ export function BillGenerationDialog({
           setSelectedCustomers(customersWithOrders.map((c: Customer) => c.id));
         }
       } catch (error) {
+        // Detect 404
+        if (error?.response?.status === 404) {
+          toast({
+            title: "Session Ended",
+            description: "This session no longer exists or has ended. The list will refresh.",
+            variant: "destructive"
+          });
+          onOpenChange(false); // Close dialog
+          if (typeof (window as any).refreshSessions === "function") (window as any).refreshSessions();
+          return;
+        }
         console.error('Error fetching table session:', error);
         toast({
           title: "Error",
@@ -178,7 +189,7 @@ export function BillGenerationDialog({
     };
 
     fetchTableSession();
-  }, [tableSessionId, restaurantId, toast]);
+  }, [tableSessionId, restaurantId, toast, onOpenChange]);
 
   const calculateTotal = (customerIds: number[]) => {
     if (!tableSession || !tableSession.customers) return 0;
@@ -341,6 +352,7 @@ export function BillGenerationDialog({
 
       onBillGenerated?.();
       onOpenChange(false);
+      if (typeof (window as any).refreshSessions === "function") (window as any).refreshSessions();
 
     } catch (error) {
       console.error('Error generating bills:', error);
@@ -376,10 +388,11 @@ export function BillGenerationDialog({
     return (
       <Dialog open={isOpen} onOpenChange={onOpenChange}>
         <DialogContent>
-          <div className="flex items-center justify-center p-8">
+          <div className="flex flex-col items-center justify-center p-8">
             <div className="text-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
-              <p>Loading session data...</p>
+              <div className="text-2xl text-[#ba1d1d] mb-2">Error</div>
+              <p className="mb-4 text-[#373643]">Failed to load table session data. Please check the session or try again.</p>
+              <Button onClick={() => onOpenChange(false)} className="bg-[#ba1d1d] text-white hover:bg-[#a11414]">Cancel</Button>
             </div>
           </div>
         </DialogContent>
@@ -389,53 +402,51 @@ export function BillGenerationDialog({
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center space-x-2">
-            <Receipt className="h-5 w-5 text-green-600" />
-                          <span>Generate Bills - Table {tableSession.table?.number || 'Unknown'}</span>
-            <Badge variant="outline">
-              {tableSession.partySize} {tableSession.partySize === 1 ? 'person' : 'people'}
-            </Badge>
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto bg-[#ffffff] border border-[#373643]/10 shadow-xl rounded-xl p-0">
+        <DialogHeader className="px-6 pt-6 pb-2 border-b border-[#373643]/10">
+          <DialogTitle className="flex items-center space-x-2 text-[#373643] text-base font-semibold">
+            <Receipt className="h-5 w-5 text-[#ba1d1d]" />
+            <span>Generate Bills - Table {tableSession.table?.number || 'No Table Assigned'}</span>
+            <Badge variant="outline" className="bg-[#f5f5f5] text-xs text-[#373643]/60 border-[#e5e5e5]">{tableSession.partySize} {tableSession.partySize === 1 ? 'person' : 'people'}</Badge>
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-6">
+        <div className="space-y-6 px-6 py-4">
             {/* Bill Type Selection */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Bill Type</CardTitle>
+            <Card className="bg-[#f9f9f9] border border-[#e5e5e5]">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-[#373643]">Bill Type</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <Button
                     variant={selectedBillType === 'individual' ? 'default' : 'outline'}
-                    className="h-20 flex flex-col items-center justify-center"
+                    className={`h-20 flex flex-col items-center justify-center border-[#373643]/10 ${selectedBillType === 'individual' ? 'bg-[#ba1d1d] text-white' : 'bg-[#f5f5f5] text-[#373643]'} text-sm`}
                     onClick={() => setSelectedBillType('individual')}
                   >
                     <User className="h-6 w-6 mb-2" />
                     <span>Individual Bills</span>
-                    <span className="text-xs opacity-70">Separate bill per person</span>
+                    <span className="text-xs text-[#373643]/60">Separate bill per person</span>
                   </Button>
                   
                   <Button
                     variant={selectedBillType === 'combined' ? 'default' : 'outline'}
-                    className="h-20 flex flex-col items-center justify-center"
+                    className={`h-20 flex flex-col items-center justify-center border-[#373643]/10 ${selectedBillType === 'combined' ? 'bg-[#ba1d1d] text-white' : 'bg-[#f5f5f5] text-[#373643]'} text-sm`}
                     onClick={() => setSelectedBillType('combined')}
                   >
                     <Users className="h-6 w-6 mb-2" />
                     <span>Combined Bill</span>
-                    <span className="text-xs opacity-70">Single bill for all</span>
+                    <span className="text-xs text-[#373643]/60">Single bill for all</span>
                   </Button>
                   
                   <Button
                     variant={selectedBillType === 'custom' ? 'default' : 'outline'}
-                    className="h-20 flex flex-col items-center justify-center"
+                    className={`h-20 flex flex-col items-center justify-center border-[#373643]/10 ${selectedBillType === 'custom' ? 'bg-[#ba1d1d] text-white' : 'bg-[#f5f5f5] text-[#373643]'} text-sm`}
                     onClick={() => setSelectedBillType('custom')}
                   >
                     <Calculator className="h-6 w-6 mb-2" />
                     <span>Custom Split</span>
-                    <span className="text-xs opacity-70">Select specific people</span>
+                    <span className="text-xs text-[#373643]/60">Select specific people</span>
                   </Button>
                 </div>
               </CardContent>
@@ -443,42 +454,42 @@ export function BillGenerationDialog({
 
             {/* Customer Selection for Custom Split */}
             {selectedBillType === 'custom' && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Select Customers</CardTitle>
+              <Card className="bg-[#f9f9f9] border border-[#e5e5e5]">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-[#373643]">Select Customers</CardTitle>
                 </CardHeader>
                 <CardContent>
                   {tableSession.customers && tableSession.customers.length > 0 ? (
                     <div className="space-y-2">
                       {tableSession.customers.map(customer => (
-                        <div key={customer.id} className="flex items-center justify-between p-3 border rounded-lg">
+                        <div key={customer.id} className="flex items-center justify-between p-3 border border-[#e5e5e5] rounded-lg bg-[#ffffff]">
                           <div className="flex items-center space-x-3">
                             <input
                               type="checkbox"
                               checked={selectedCustomers.includes(customer.id)}
                               onChange={() => handleCustomerToggle(customer.id)}
-                              className="rounded"
+                              className="rounded border-[#ba1d1d] focus:ring-[#ba1d1d]"
                             />
                             <div>
                               <div className="flex items-center space-x-2">
-                                <span className="font-medium">{customer.name}</span>
+                                <span className="font-medium text-[#373643]">{customer.name}</span>
                                 {customer.isMainCustomer && (
-                                  <Badge variant="default" className="text-xs">Main</Badge>
+                                  <Badge variant="default" className="text-xs bg-[#ba1d1d]/10 text-[#ba1d1d] border-none">Main</Badge>
                                 )}
                               </div>
-                              <span className="text-sm text-gray-500">
+                              <span className="text-xs text-[#373643]/60">
                                 {customer.orders?.length || 0} order{(customer.orders?.length || 0) !== 1 ? 's' : ''}
                               </span>
                             </div>
                           </div>
                           <div className="text-right">
-                            <span className="font-medium">{formatCurrency(customer.totalAmount)}</span>
+                            <span className="font-medium text-[#ba1d1d]">{formatCurrency(customer.totalAmount)}</span>
                           </div>
                         </div>
                       ))}
                     </div>
                   ) : (
-                    <div className="text-center py-4 text-gray-500">
+                    <div className="text-center py-4 text-[#373643]/60">
                       No customers found for this session
                     </div>
                   )}
@@ -487,9 +498,9 @@ export function BillGenerationDialog({
             )}
 
             {/* Bill Preview */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Bill Preview</CardTitle>
+            <Card className="bg-[#f9f9f9] border border-[#e5e5e5]">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-[#373643]">Bill Preview</CardTitle>
               </CardHeader>
               <CardContent>
                 {selectedBillType === 'individual' && (
@@ -599,28 +610,23 @@ export function BillGenerationDialog({
             </Card>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="px-6 pb-6 pt-0 border-t border-[#373643]/10">
           <Button
-            variant="outline"
             onClick={() => onOpenChange(false)}
+            className="bg-[#ba1d1d] text-white hover:bg-[#a11414] border-none shadow-sm"
           >
             Cancel
           </Button>
           <Button
             onClick={handleGenerateBills}
             disabled={isGenerating || (selectedBillType === 'custom' && selectedCustomers.length === 0)}
-            className="bg-green-600 hover:bg-green-700"
+            variant="success"
+            className="shadow-sm"
           >
             {isGenerating ? (
-              <span className="flex items-center">
-                <span className="animate-spin mr-2 h-4 w-4 border-2 border-white border-t-transparent rounded-full"></span>
-                Generating...
-              </span>
+              <span className="flex items-center"><span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></span>Generating...</span>
             ) : (
-              <>
-                <Receipt className="h-4 w-4 mr-2" />
-                Generate Bills
-              </>
+              <><Receipt className="h-4 w-4 mr-2" /> Generate Bills</>
             )}
           </Button>
         </DialogFooter>

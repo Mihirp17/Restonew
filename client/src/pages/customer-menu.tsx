@@ -12,8 +12,8 @@ import BillView from "@/components/BillView";
 import FeedbackModal from "@/components/FeedbackModal";
 import BottomNavigation from "@/components/BottomNavigation";
 import { Button } from "@/components/ui/button";
-import { History, Receipt, Star } from "lucide-react";
-import type { MenuCategory, MenuItem } from "@shared/schema";
+import { History, Receipt, Search } from "lucide-react";
+import type { MenuItem } from "@shared/schema";
 
 export default function CustomerMenu() {
   const params = useParams();
@@ -30,7 +30,7 @@ export default function CustomerMenu() {
   
   const { itemCount } = useCart();
   
-  const [selectedCategory, setSelectedCategory] = useState<number | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [showSessionModal, setShowSessionModal] = useState(false);
   const [showCartModal, setShowCartModal] = useState(false);
   const [showOrderHistory, setShowOrderHistory] = useState(false);
@@ -56,25 +56,25 @@ export default function CustomerMenu() {
     }
   }, [restaurantId, tableNumber, customer]);
 
-  const { data: menuData, isLoading: menuLoading } = useQuery({
-    queryKey: ["/api/public/restaurants", restaurantId, "menu-items"],
+  const { data: menuResponse, isLoading: menuLoading } = useQuery({
+    queryKey: [`/api/public/restaurants/${restaurantId}/menu-items`],
     enabled: !!restaurantId,
   });
 
   if (restaurantLoading || menuLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-white flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600 mx-auto mb-4"></div>
           <p className="text-gray-600">Loading menu...</p>
         </div>
       </div>
     );
   }
 
-  if (!restaurant || !menuData) {
+  if (!restaurant || !menuResponse) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-white flex items-center justify-center">
         <div className="text-center">
           <p className="text-gray-600">Restaurant not found</p>
         </div>
@@ -82,76 +82,122 @@ export default function CustomerMenu() {
     );
   }
 
-  const categories: MenuCategory[] = menuData.categories || [];
-  const filteredItems = selectedCategory 
-    ? categories.find(cat => cat.id === selectedCategory)?.items || []
-    : menuData.allItems || [];
+  // Get menu data from the API response
+  const menuData: MenuItem[] = (menuResponse as any)?.allItems || [];
+  const categories: string[] = [...new Set(menuData.map((item: MenuItem) => item.category || "Other"))];
+  const filteredItems = selectedCategory === "all" 
+    ? menuData 
+    : menuData.filter((item: MenuItem) => (item.category || "Other") === selectedCategory);
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-white">
+      {/* Session Info Bar - Show when session is active and has multiple potential customers */}
+      {session && customer && (
+        <div className="bg-white border-b border-gray-200 px-4 py-2">
+          <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center space-x-4">
+              <span className="text-gray-600">Session #{session.id}</span>
+              <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                session.status === 'waiting' ? 'bg-yellow-100 text-yellow-800' :
+                session.status === 'active' ? 'bg-green-100 text-green-800' :
+                'bg-gray-100 text-gray-800'
+              }`}>
+                {session.status === 'waiting' ? 'Place first order to activate' : 
+                 session.status === 'active' ? 'Session Active' : 
+                 session.status}
+              </span>
+            </div>
+            <div className="text-xs text-gray-500">
+              Logged in as: {customer.name}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
-      <header className="bg-white shadow-sm sticky top-0 z-40">
-        <div className="px-4 py-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              {restaurant.logo && (
-                <img 
-                  src={restaurant.logo} 
-                  alt={`${restaurant.name} logo`}
-                  className="w-12 h-12 rounded-full object-cover"
-                />
-              )}
-              <div>
-                <h1 className="text-lg font-bold text-gray-900">{restaurant.name}</h1>
+      <header className="bg-white border-b border-red-600 sticky top-0 z-40 px-4 py-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            {restaurant.logo && (
+              <img 
+                src={restaurant.logo} 
+                alt={`${restaurant.name} logo`}
+                className="w-12 h-12 rounded-full object-cover"
+              />
+            )}
+            <div>
+              <h1 className="text-xl font-bold text-black">Hello, {customer?.name || "Guest"}! 😊</h1>
+              <div className="flex items-center space-x-3 text-sm text-red-600">
                 {tableNumber && (
-                  <p className="text-xs text-gray-500">Table {tableNumber}</p>
+                  <span>Table {tableNumber}</span>
+                )}
+                {session && (
+                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                    session.status === 'waiting' ? 'bg-yellow-100 text-yellow-800' :
+                    session.status === 'active' ? 'bg-green-100 text-green-800' :
+                    'bg-gray-100 text-gray-800'
+                  }`}>
+                    {session.status === 'waiting' ? 'Waiting' : 
+                     session.status === 'active' ? 'Active' : 
+                     session.status}
+                  </span>
+                )}
+                {customer && (
+                  <span className="text-xs">Welcome, {customer.name}</span>
                 )}
               </div>
             </div>
-            
-            <div className="flex items-center space-x-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowOrderHistory(true)}
-                className="p-2"
-              >
-                <History className="h-5 w-5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowBillView(true)}
-                className="p-2"
-              >
-                <Receipt className="h-5 w-5" />
-              </Button>
-            </div>
           </div>
+          <div className="flex items-center space-x-2">
+            {!customer && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowSessionModal(true)}
+                className="text-red-600 border-red-600 rounded-full"
+              >
+                Join Session
+              </Button>
+            )}
+            <Button variant="ghost" size="sm" onClick={() => setShowOrderHistory(true)} className="text-red-600">
+              <History className="h-5 w-5" />
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setShowBillView(true)} className="text-red-600">
+              <Receipt className="h-5 w-5" />
+            </Button>
+          </div>
+        </div>
+        <div className="mt-4 flex items-center bg-gray-100 rounded-full px-4 py-2">
+          <Search className="h-4 w-4 text-gray-600 mr-2" />
+          <input
+            type="text"
+            placeholder="Enter a dish"
+            className="bg-transparent w-full outline-none text-gray-600"
+          />
         </div>
       </header>
 
       {/* Category Filter */}
       {categories.length > 0 && (
-        <div className="bg-white border-b border-gray-100">
-          <div className="flex overflow-x-auto px-4 py-3 space-x-2 scrollbar-hide">
+        <div className="bg-white sticky top-[120px] z-30 px-4 py-3">
+          <div className="flex overflow-x-auto space-x-2 scrollbar-hide">
             <Button
-              variant={selectedCategory === null ? "default" : "secondary"}
+              variant={selectedCategory === "all" ? "default" : "outline"}
               size="sm"
-              onClick={() => setSelectedCategory(null)}
-              className="flex-shrink-0 rounded-full"
+              onClick={() => setSelectedCategory("all")}
+              className={`rounded-full ${selectedCategory === "all" ? "bg-red-600 text-white" : "border-gray-200 text-gray-600"}`}
             >
               All Items
             </Button>
             {categories.map((category) => (
               <Button
-                key={category.id}
-                variant={selectedCategory === category.id ? "default" : "secondary"}
+                key={category}
+                variant={selectedCategory === category ? "default" : "outline"}
                 size="sm"
-                onClick={() => setSelectedCategory(category.id)}
-                className="flex-shrink-0 rounded-full"
+                onClick={() => setSelectedCategory(category)}
+                className={`rounded-full ${selectedCategory === category ? "bg-red-600 text-white" : "border-gray-200 text-gray-600"}`}
               >
-                {category.name}
+                {category}
               </Button>
             ))}
           </div>
@@ -159,19 +205,24 @@ export default function CustomerMenu() {
       )}
 
       {/* Menu Items */}
-      <main className="px-4 py-4 pb-32">
-        {selectedCategory === null ? (
+      <main className="px-4 py-6 pb-32">
+        {selectedCategory === "all" ? (
           // Show all categories with their items
-          categories.map((category) => (
-            <div key={category.id} className="mb-8">
-              <h2 className="text-xl font-bold text-gray-900 mb-4">{category.name}</h2>
-              <div className="space-y-4">
-                {category.items?.map((item: MenuItem) => (
-                  <MenuItemCard key={item.id} item={item} />
-                ))}
+          categories.map((category) => {
+            const categoryItems = menuData.filter((item: MenuItem) => (item.category || "Other") === category);
+            if (categoryItems.length === 0) return null;
+            
+            return (
+              <div key={category} className="mb-8">
+                <h2 className="text-lg font-bold text-black mb-4">{category}</h2>
+                <div className="space-y-4">
+                  {categoryItems.map((item: MenuItem) => (
+                    <MenuItemCard key={item.id} item={item} />
+                  ))}
+                </div>
               </div>
-            </div>
-          ))
+            );
+          })
         ) : (
           // Show filtered items
           <div className="space-y-4">

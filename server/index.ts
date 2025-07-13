@@ -6,6 +6,8 @@ import path from "path";
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import cors from 'cors';
+import cron from 'node-cron';
+import { storage } from './storage';
 
 // Debug logs to check environment variables
 console.log("Starting server initialization...");
@@ -173,6 +175,16 @@ app.use('/api/', validateRequest);
       serveStatic(app);
       console.log("Static file serving setup completed");
     }
+
+    // Schedule session cleanup every 30 minutes
+    cron.schedule('*/30 * * * *', async () => {
+      try {
+        const result = await storage.cleanupEmptySessions(30);
+        console.log(`[CRON] Session cleanup ran: removedSessions=${result.removedSessions}, removedCustomers=${result.removedCustomers}`);
+      } catch (error) {
+        console.error('[CRON] Error during session cleanup:', error);
+      }
+    });
 
     const port = Number(process.env.PORT) || 3000;
     const host = process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1';

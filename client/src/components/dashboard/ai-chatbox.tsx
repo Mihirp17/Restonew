@@ -175,7 +175,7 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
 
       <CardContent className="flex-1 flex flex-col p-0">
         {/* Messages */}
-        <ScrollArea ref={scrollAreaRef} className="flex-1 px-4">
+        <ScrollArea ref={scrollAreaRef} className="flex-1 px-4 max-h-[380px] min-h-[200px]">
           <div className="space-y-4 pb-4">
             {messages.map((message) => (
               <motion.div
@@ -184,7 +184,8 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
                 animate={{ opacity: 1, y: 0 }}
                 className={`flex ${message.isUser ? 'justify-end' : 'justify-start'} w-full`}
               >
-                <div className={`flex items-start space-x-2 max-w-[80%] ${message.isUser ? 'flex-row-reverse space-x-reverse' : ''}`}>
+                <div className={`flex items-end gap-2 w-full max-w-full ${message.isUser ? 'flex-row-reverse' : ''}`}>
+                  {/* Avatar */}
                   <div className={`flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-full ${
                     message.isUser 
                       ? 'bg-blue-100' 
@@ -196,12 +197,13 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
                       <Bot className="h-4 w-4 text-purple-600" />
                     )}
                   </div>
-                  <div className={`flex flex-col ${message.isUser ? 'items-end' : 'items-start'} max-w-full overflow-hidden`}>
-                    <div className={`rounded-lg p-3 overflow-hidden ${
+                  {/* Bubble */}
+                  <div className={`flex flex-col ${message.isUser ? 'items-end' : 'items-start'} max-w-[80%] min-w-0`}>
+                    <div className={`rounded-lg p-3 overflow-x-auto whitespace-pre-wrap break-words overflow-wrap-anywhere shadow ${
                       message.isUser
                         ? 'bg-blue-600 text-white'
                         : 'bg-gray-100 text-gray-900'
-                    }`}>
+                    }`} style={{ wordBreak: 'break-word', maxWidth: '100%' }}>
                       <p className="text-sm whitespace-pre-wrap break-words overflow-wrap-anywhere">{message.content}</p>
                     </div>
                     <span className="text-xs text-gray-500 mt-1">{formatTime(message.timestamp)}</span>
@@ -209,7 +211,6 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
                 </div>
               </motion.div>
             ))}
-            
             <AnimatePresence>
               {isTyping && <TypingIndicator />}
             </AnimatePresence>

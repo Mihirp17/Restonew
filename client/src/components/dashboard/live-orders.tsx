@@ -14,12 +14,20 @@ interface LiveOrdersProps {
 interface OrderType {
   id: number;
   orderNumber?: string;
+  displayOrderNumber?: number;
   status: 'pending' | 'confirmed' | 'preparing' | 'served' | 'completed' | 'cancelled';
   total: string;
   createdAt: string | Date;
   customerName?: string;
   tableNumber?: number;
   groupId?: number;
+  items?: Array<{
+    id: number;
+    quantity: number;
+    price: string;
+    menuItemId: number;
+    menuItemName: string;
+  }>;
 }
 
 // Memoized order card component to prevent unnecessary re-renders
@@ -77,13 +85,29 @@ const OrderCard = memo(({
       <div className="p-4">
         <div className="flex justify-between mb-3">
           <div>
-            <h3 className="text-sm font-medium text-gray-900 dark:text-white">Order #{order.orderNumber || order.id}</h3>
+            <h3 className="text-sm font-medium text-gray-900 dark:text-white">
+              Order #{order.displayOrderNumber || order.orderNumber || order.id}
+            </h3>
             <p className="text-xs text-gray-500 dark:text-gray-400">{timeAgo}</p>
           </div>
           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusColors.bgClass} ${statusColors.textClass} ${statusColors.darkBgClass} ${statusColors.darkTextClass}`}>
             {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
           </span>
         </div>
+        {/* Show ordered items */}
+        {order.items && order.items.length > 0 && (
+          <div className="mb-3">
+            <div className="text-xs font-semibold text-gray-700 dark:text-gray-200 mb-1">Items:</div>
+            <ul className="text-xs text-gray-900 dark:text-white space-y-1">
+              {order.items.map(item => (
+                <li key={item.id} className="flex justify-between">
+                  <span>{item.menuItemName}</span>
+                  <span>x{item.quantity}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         
         <div className="mb-3">
           {order.customerName && (

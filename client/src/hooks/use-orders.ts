@@ -31,11 +31,19 @@ export interface Order {
 export interface LightweightOrder {
   id: number;
   orderNumber: string;
+  displayOrderNumber?: number;
   status: OrderStatus;
   total: string;
   createdAt: Date;
   customerName?: string;
   tableNumber?: number;
+  items?: Array<{
+    id: number;
+    quantity: number;
+    price: string;
+    menuItemId: number;
+    menuItemName: string;
+  }>;
 }
 
 export type NewOrderItem = Omit<OrderItem, 'id' | 'orderId' | 'createdAt' | 'updatedAt'>;
@@ -155,7 +163,7 @@ export function useOrders(restaurantId: number, options?: { lightweight?: boolea
     queryFn: async () => {
       try {
         const endpoint = lightweight 
-          ? `/api/restaurants/${restaurantId}/active-orders/thin?limit=${limit}`
+          ? `/api/restaurants/${restaurantId}/active-orders-lightweight?limit=${limit}`
           : `/api/restaurants/${restaurantId}/active-orders?limit=${limit}`;
         
         const result = await apiRequest({

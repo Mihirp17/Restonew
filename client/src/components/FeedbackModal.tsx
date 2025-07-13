@@ -70,14 +70,14 @@ export default function FeedbackModal({ open, onOpenChange }: FeedbackModalProps
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md bg-white rounded-lg">
         <DialogHeader>
-          <DialogTitle>Share Your Experience</DialogTitle>
+          <DialogTitle className="text-lg font-bold text-black">Share Your Experience</DialogTitle>
         </DialogHeader>
         
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4 p-4">
           <div>
-            <Label>Rating *</Label>
+            <Label className="font-medium text-black">Rating *</Label>
             <div className="flex space-x-1 mt-2">
               {[1, 2, 3, 4, 5].map((star) => (
                 <button
@@ -107,17 +107,18 @@ export default function FeedbackModal({ open, onOpenChange }: FeedbackModalProps
           </div>
           
           <div>
-            <Label htmlFor="comment">Comments (optional)</Label>
+            <Label htmlFor="comment" className="font-medium text-black">Comments (optional)</Label>
             <Textarea
               id="comment"
               value={comment}
               onChange={(e) => setComment(e.target.value)}
               placeholder="Tell us about your experience..."
               rows={4}
+              className="rounded-lg bg-gray-100 mt-1"
             />
           </div>
           
-          <Button type="submit" disabled={isSubmitting} className="w-full">
+          <Button type="submit" disabled={isSubmitting} className="w-full bg-red-600 text-white rounded-lg hover:bg-red-700">
             {isSubmitting ? "Submitting..." : "Submit Feedback"}
           </Button>
         </form>

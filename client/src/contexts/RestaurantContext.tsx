@@ -38,7 +38,7 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
   });
 
   const { data: restaurant, isLoading } = useQuery({
-    queryKey: ["/api/public/restaurants", restaurantId],
+    queryKey: [`/api/public/restaurants/${restaurantId}`],
     enabled: !!restaurantId,
   });
 
@@ -95,7 +95,7 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
       value={{
         restaurantId,
         tableNumber,
-        restaurant: restaurant || null,
+        restaurant: (restaurant as Restaurant) || null,
         session,
         customer,
         setRestaurantId: handleSetRestaurantId,

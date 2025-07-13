@@ -15,10 +15,11 @@ interface PopularItem {
 
 interface PopularItemsProps {
   restaurantId?: number;
+  dateRange: 'today' | 'week' | 'month';
 }
 
 // Memoized item component
-const PopularItemRow = memo(({ item }: { item: PopularItem }) => {
+const PopularItemRow = memo(({ item }: { item: PopularItem & { label?: string } }) => {
   const getItemIcon = useCallback((name: string): string => {
     const lowerName = name.toLowerCase();
     if (lowerName.includes('burger')) return 'lunch_dining';
@@ -38,7 +39,7 @@ const PopularItemRow = memo(({ item }: { item: PopularItem }) => {
       </div>
       <div className="ml-3 flex-1">
         <p className="text-sm font-medium text-gray-900 dark:text-white">{item.name}</p>
-        <p className="text-xs text-gray-500 dark:text-gray-400">{item.count} orders this month</p>
+        <p className="text-xs text-gray-500 dark:text-gray-400">{item.count} {item.label || 'orders'}</p>
       </div>
       <span className="text-sm font-medium text-gray-900 dark:text-white">
         {formattedPrice}
@@ -49,20 +50,45 @@ const PopularItemRow = memo(({ item }: { item: PopularItem }) => {
 
 PopularItemRow.displayName = 'PopularItemRow';
 
-export const PopularItems = memo(function PopularItems({ restaurantId }: PopularItemsProps) {
+export const PopularItems = memo(function PopularItems({ restaurantId, dateRange }: PopularItemsProps) {
   const { toast } = useToast();
   const { t } = useLang();
   const [popularItems, setPopularItems] = useState<PopularItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
+  function getDateRange(range: 'today' | 'week' | 'month') {
+    const now = new Date();
+    let startDate: Date, endDate: Date;
+    switch (range) {
+      case 'today':
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+        break;
+      case 'week':
+        // Last 7 days
+        startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        startDate.setHours(0, 0, 0, 0);
+        endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+        break;
+      case 'month':
+      default:
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+        break;
+    }
+    console.log(`PopularItems: Date range for ${range}:`, { startDate, endDate });
+    return { startDate, endDate };
+  }
+
   const fetchPopularItems = useCallback(async () => {
       if (!restaurantId) return;
-
+    setIsLoading(true);
       try {
-        const response = await fetch(`/api/restaurants/${restaurantId}/analytics/popular-items?limit=4`, {
-          credentials: 'include'
-        });
-        
+      const { startDate, endDate } = getDateRange(dateRange);
+      const response = await fetch(
+        `/api/restaurants/${restaurantId}/analytics/popular-items?limit=4&startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}`,
+        { credentials: 'include' }
+      );
         if (response.ok) {
           const data = await response.json();
           setPopularItems(data);
@@ -79,11 +105,21 @@ export const PopularItems = memo(function PopularItems({ restaurantId }: Popular
       } finally {
         setIsLoading(false);
       }
-  }, [restaurantId, toast, t]);
+  }, [restaurantId, toast, t, dateRange]);
 
   useEffect(() => {
     fetchPopularItems();
   }, [fetchPopularItems]);
+
+  // Helper for label
+  function getLabel(range: 'today' | 'week' | 'month') {
+    switch (range) {
+      case 'today': return t('ordersToday', 'orders today');
+      case 'week': return t('ordersThisWeek', 'orders this week');
+      case 'month':
+      default: return t('ordersThisMonth', 'orders this month');
+    }
+  }
 
   // Memoize loading skeleton
   const loadingSkeleton = useMemo(() => (
@@ -124,7 +160,7 @@ export const PopularItems = memo(function PopularItems({ restaurantId }: Popular
       <ul className="divide-y divide-gray-200 dark:divide-gray-700">
         {popularItems && popularItems.length > 0 ? (
           popularItems.map((item) => (
-            <PopularItemRow key={item.id} item={item} />
+            <PopularItemRow key={item.id} item={{ ...item, label: getLabel(dateRange) }} />
           ))
         ) : (
           <li className="p-8 text-center">

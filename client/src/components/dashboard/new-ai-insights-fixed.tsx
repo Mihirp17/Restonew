@@ -56,6 +56,9 @@ interface DemandPrediction {
   confidence: number;
   peakHours: string[];
   trend: 'up' | 'down' | 'stable';
+  currentPeriodOrders: number; // Current period orders (today/this week/this month)
+  totalOrders: number; // Total orders in timeframe
+  timeframe: 'day' | 'week' | 'month'; // Timeframe for context
 }
 
 interface FoodPairing {
@@ -85,7 +88,11 @@ interface AIInsightsProps {
   endDate?: Date;
 }
 
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#FF6B6B'];
+const BRAND_RED = "#ba1d1d";
+const BRAND_GREEN = "#22bb33";
+const BRAND_GREEN_DARK = "#178a29";
+const BRAND_GRAY = "#373643";
+const BRAND_COLORS = [BRAND_RED, BRAND_GREEN, BRAND_GREEN_DARK, BRAND_GRAY];
 
 export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsProps) {
   const [menuAnalytics, setMenuAnalytics] = useState<MenuAnalytics | null>(null);
@@ -94,6 +101,8 @@ export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsPr
   const [timeframe, setTimeframe] = useState<'day' | 'week' | 'month'>('day');
   const [isLoading, setIsLoading] = useState(true);
   const { toast } = useToast();
+  const [showAllBars, setShowAllBars] = useState(false);
+  const [activeTab, setActiveTab] = useState("menu");
 
   useEffect(() => {
     fetchData();
@@ -139,94 +148,73 @@ export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsPr
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-purple-100 dark:bg-purple-900/50 rounded-lg">
-            <span className="material-icons text-xl text-purple-600 dark:text-purple-300">analytics</span>
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+        {/* Header and TabsList inside Tabs for correct tab switching */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-[#ba1d1d]/10 rounded-lg">
+                <span className="material-icons text-xl text-[#ba1d1d]">analytics</span>
+              </div>
+              <div>
+                <h2 className="text-2xl font-semibold">Restaurant Analytics</h2>
+                <p className="text-sm text-gray-600 dark:text-gray-400">AI-powered insights for your business</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-500">View data by:</span>
+              <Select value={timeframe} onValueChange={(value: any) => setTimeframe(value)}>
+                <SelectTrigger className="w-[140px]">
+                  <SelectValue placeholder="Select timeframe" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="day">Daily View</SelectItem>
+                  <SelectItem value="week">Weekly View</SelectItem>
+                  <SelectItem value="month">Monthly View</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
-          <div>
-            <h2 className="text-2xl font-semibold">Restaurant Analytics</h2>
-            <p className="text-sm text-gray-600 dark:text-gray-400">AI-powered insights for your business</p>
-          </div>
+          <TabsList className="flex w-full justify-center gap-2 bg-transparent border-b border-gray-100 mb-4">
+            <TabsTrigger value="menu" className="flex items-center gap-2 px-5 py-2 border-b-2 data-[state=active]:border-[#ba1d1d] data-[state=active]:text-[#ba1d1d] data-[state=inactive]:border-transparent data-[state=inactive]:text-[#373643] transition bg-transparent font-medium">
+              <span className="material-icons text-lg">restaurant_menu</span>
+              Menu Performance
+            </TabsTrigger>
+            <TabsTrigger value="pairings" className="flex items-center gap-2 px-5 py-2 border-b-2 data-[state=active]:border-[#22bb33] data-[state=active]:text-[#22bb33] data-[state=inactive]:border-transparent data-[state=inactive]:text-[#373643] transition bg-transparent font-medium">
+              <span className="material-icons text-lg">restaurant</span>
+              F&P
+            </TabsTrigger>
+            <TabsTrigger value="categories" className="flex items-center gap-2 px-5 py-2 border-b-2 data-[state=active]:border-[#178a29] data-[state=active]:text-[#178a29] data-[state=inactive]:border-transparent data-[state=inactive]:text-[#373643] transition bg-transparent font-medium">
+              <span className="material-icons text-lg">category</span>
+              Categories
+            </TabsTrigger>
+            <TabsTrigger value="demand" className="flex items-center gap-2 px-5 py-2 border-b-2 data-[state=active]:border-[#ba1d1d] data-[state=active]:text-[#ba1d1d] data-[state=inactive]:border-transparent data-[state=inactive]:text-[#373643] transition bg-transparent font-medium">
+              <span className="material-icons text-lg">analytics</span>
+              Predictions
+            </TabsTrigger>
+          </TabsList>
         </div>
-      </div>
-
-      <div className="flex items-center justify-end gap-3">
-        <div className="text-sm text-gray-500">View data by:</div>
-        <Select value={timeframe} onValueChange={(value: any) => setTimeframe(value)}>
-          <SelectTrigger className="w-[140px]">
-            <SelectValue placeholder="Select timeframe" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="day">
-              <div className="flex items-center gap-2">
-                <span className="material-icons text-sm">today</span>
-                Daily View
-              </div>
-            </SelectItem>
-            <SelectItem value="week">
-              <div className="flex items-center gap-2">
-                <span className="material-icons text-sm">date_range</span>
-                Weekly View
-              </div>
-            </SelectItem>
-            <SelectItem value="month">
-              <div className="flex items-center gap-2">
-                <span className="material-icons text-sm">calendar_month</span>
-                Monthly View
-              </div>
-            </SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-
-      <Tabs defaultValue="menu" className="w-full">
-        <TabsList className="inline-flex h-10 items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground w-auto">
-          <TabsTrigger value="menu" className="flex items-center gap-2 px-4">
-            <span className="material-icons text-lg">restaurant_menu</span>
-            Menu Performance
-          </TabsTrigger>
-          <TabsTrigger value="pairings" className="flex items-center gap-2 px-4">
-            <span className="material-icons text-lg">restaurant</span>
-            F&P
-          </TabsTrigger>
-          <TabsTrigger value="categories" className="flex items-center gap-2 px-4">
-            <span className="material-icons text-lg">category</span>
-            Categories
-          </TabsTrigger>
-          <TabsTrigger value="demand" className="flex items-center gap-2 px-4">
-            <span className="material-icons text-lg">analytics</span>
-            Predictions
-          </TabsTrigger>
-        </TabsList>
-
+        {/* All TabsContent remain as before */}
         <TabsContent value="menu" className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {/* Stats Summary */}
             <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Top Selling Items */}
-              <Card className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/50 dark:to-blue-800/50">
-                <CardHeader>
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <CardTitle className="flex items-center gap-2">
-                        <span className="material-icons text-blue-600">trending_up</span>
-                        Top Performers
-                      </CardTitle>
-                      <CardDescription>Best selling menu items</CardDescription>
-                    </div>
-                    <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-800 dark:text-blue-100">
-                      {timeframe === 'day' ? 'Today' : timeframe === 'week' ? 'This Week' : 'This Month'}
-                    </Badge>
-                  </div>
+              <Card className="bg-white shadow-sm rounded-xl border border-gray-100">
+                <CardHeader className="pb-2">
+                  <CardTitle className="flex items-center gap-2 text-lg font-semibold text-[#373643]">
+                    <span className="material-icons text-base" style={{ color: BRAND_RED }}>trending_up</span>
+                    Top Performers
+                  </CardTitle>
+                  <CardDescription className="text-xs text-gray-500">Best selling menu items</CardDescription>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="pt-0">
                   <ScrollArea className="h-[300px] pr-4">
                     <div className="space-y-4">
                       {menuAnalytics?.topSelling.map((item, index) => (
                         <div key={index} className="flex items-center justify-between p-3 bg-white/60 dark:bg-white/10 rounded-lg hover:bg-white/80 dark:hover:bg-white/20 transition-all">
                           <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-800 flex items-center justify-center text-blue-600 dark:text-blue-200 font-bold">
+                            <div className="w-8 h-8 rounded-full bg-[#ba1d1d]/10 dark:bg-[#ba1d1d]/80 flex items-center justify-center text-[#ba1d1d] dark:text-[#ba1d1d]/20 font-bold">
                               {index + 1}
                             </div>
                             <div>
@@ -248,17 +236,17 @@ export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsPr
               </Card>
 
               {/* Low Selling Items */}
-              <Card className="bg-gradient-to-br from-red-50 to-red-100 dark:from-red-900/50 dark:to-red-800/50">
+              <Card className="bg-white shadow-sm rounded-xl border border-gray-100">
                 <CardHeader>
                   <div className="flex items-start justify-between">
                     <div>
                       <CardTitle className="flex items-center gap-2">
-                        <span className="material-icons text-red-600">trending_down</span>
+                        <span className="material-icons text-[#22bb33]">trending_down</span>
                         Needs Attention
                       </CardTitle>
                       <CardDescription>Under-performing items</CardDescription>
                     </div>
-                    <Badge className="bg-red-100 text-red-800 dark:bg-red-800 dark:text-red-100">
+                    <Badge className="bg-[#22bb33]/10 text-[#22bb33] dark:bg-[#22bb33]/80 dark:text-[#22bb33]">
                       {timeframe === 'day' ? 'Today' : timeframe === 'week' ? 'This Week' : 'This Month'}
                     </Badge>
                   </div>
@@ -269,7 +257,7 @@ export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsPr
                       {menuAnalytics?.lowSelling.map((item, index) => (
                         <div key={index} className="flex items-center justify-between p-3 bg-white/60 dark:bg-white/10 rounded-lg hover:bg-white/80 dark:hover:bg-white/20 transition-all">
                           <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-full bg-red-100 dark:bg-red-800 flex items-center justify-center text-red-600 dark:text-red-200 font-medium">
+                            <div className="w-8 h-8 rounded-full bg-[#22bb33]/10 dark:bg-[#22bb33]/80 flex items-center justify-center text-[#22bb33] dark:text-[#22bb33]/20 font-medium">
                               <span className="material-icons text-sm">warning</span>
                             </div>
                             <div>
@@ -292,58 +280,82 @@ export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsPr
             </div>
 
             {/* Performance Chart */}
-            <Card className="md:row-span-2">
+            <Card className="md:row-span-2 w-full bg-white shadow-sm rounded-xl border border-gray-100">
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <span className="material-icons text-purple-600">insights</span>
+                <CardTitle className="flex items-center gap-2 text-lg font-semibold text-[#373643]">
+                  <span className="material-icons text-base" style={{ color: BRAND_RED }}>insights</span>
                   Sales Performance
                 </CardTitle>
-                <CardDescription>Comparing top vs bottom items</CardDescription>
+                <CardDescription className="text-xs text-gray-500">Comparing top vs bottom items</CardDescription>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={400}>
-                  <BarChart 
+                <ResponsiveContainer width="100%" height={420} minWidth={420}>
+                  <BarChart
                     data={[
                       ...(menuAnalytics?.topSelling || []).map(item => ({ ...item, type: 'Top Selling' })),
                       ...(menuAnalytics?.lowSelling || []).map(item => ({ ...item, type: 'Low Selling' }))
-                    ]}
-                    margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
+                    ].slice(0, showAllBars ? 20 : 8)}
+                    margin={{ top: 20, right: 30, left: 20, bottom: 80 }}
                   >
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis 
-                      dataKey="name" 
-                      angle={-45} 
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                    <XAxis
+                      dataKey="name"
+                      angle={-30}
                       textAnchor="end"
-                      height={60}
+                      height={80}
                       interval={0}
+                      tick={{ fontSize: 13, fill: '#373643' }}
                     />
-                    <YAxis />
-                    <Tooltip />
-                    <Bar 
-                      dataKey="count" 
-                      fill="#0088FE"
+                    <YAxis tick={{ fontSize: 13, fill: '#373643' }} />
+                    <Tooltip
+                      content={({ active, payload }) =>
+                        active && payload && payload.length ? (
+                          <div className="bg-white p-3 border border-gray-200 rounded-lg shadow-lg">
+                            <p className="font-medium text-gray-800">{payload[0].payload.name}</p>
+                            <p className="text-sm" style={{ color: payload[0].payload.type === 'Top Selling' ? '#ba1d1d' : '#22bb33' }}>
+                              Orders: {payload[0].value}
+                            </p>
+                          </div>
+                        ) : null
+                      }
+                    />
+                    <Bar
+                      dataKey="count"
                       radius={[4, 4, 0, 0]}
+                      label={({ x, y, width, height, value }) => (
+                        <text x={x + width / 2} y={y - 8} textAnchor="middle" fontSize="13" fill="#373643">{value}</text>
+                      )}
                     >
-                      {(menuAnalytics?.topSelling || []).concat(menuAnalytics?.lowSelling || []).map((entry, index) => (
-                        <Cell 
-                          key={`cell-${index}`} 
-                          fill={entry.type === 'Top Selling' ? '#0088FE' : '#FF6B6B'} 
+                      {[
+                        ...(menuAnalytics?.topSelling || []).map(item => ({ ...item, type: 'Top Selling' })),
+                        ...(menuAnalytics?.lowSelling || []).map(item => ({ ...item, type: 'Low Selling' }))
+                      ].slice(0, showAllBars ? 20 : 8).map((entry, index) => (
+                        <Cell
+                          key={`cell-${index}`}
+                          fill={entry.type === 'Top Selling' ? '#ba1d1d' : '#22bb33'}
                         />
                       ))}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
+                {((menuAnalytics?.topSelling?.length || 0) + (menuAnalytics?.lowSelling?.length || 0)) > 8 && (
+                  <div className="flex justify-end mt-2">
+                    <Button size="sm" variant="outline" onClick={() => setShowAllBars(v => !v)}>
+                      {showAllBars ? 'Show Top 8' : 'Show All'}
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>
 
           {/* AI Recommendations */}
-          <Card className="mt-6 bg-gradient-to-br from-purple-50 to-indigo-50 dark:from-gray-800 dark:to-gray-700">
+          <Card className="mt-6 bg-white shadow-sm rounded-xl border border-gray-100">
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle className="flex items-center gap-2">
-                    <span className="material-icons text-purple-600">lightbulb</span>
+                    <span className="material-icons text-[#ba1d1d]">lightbulb</span>
                     AI-Powered Recommendations
                   </CardTitle>
                   <CardDescription>Smart suggestions to optimize your menu</CardDescription>
@@ -361,9 +373,9 @@ export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsPr
                     <div key={index} className="p-4 bg-white/80 dark:bg-gray-800/50 rounded-lg hover:shadow-md transition-all">
                       <div className="flex items-center gap-3 mb-3">
                         <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                          rec.action === 'promote' ? 'bg-green-100 text-green-600' :
-                          rec.action === 'remove' ? 'bg-red-100 text-red-600' :
-                          'bg-yellow-100 text-yellow-600'
+                          rec.action === 'promote' ? 'bg-[#22bb33]/10 text-[#22bb33]' :
+                          rec.action === 'remove' ? 'bg-[#ba1d1d]/10 text-[#ba1d1d]' :
+                          'bg-[#ba1d1d]/10 text-[#ba1d1d]'
                         }`}>
                           <span className="material-icons">
                             {rec.action === 'promote' ? 'trending_up' :
@@ -373,9 +385,9 @@ export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsPr
                         </div>
                         <div>
                           <Badge className={`
-                            ${rec.action === 'promote' ? 'bg-green-100 text-green-800 dark:bg-green-800 dark:text-green-100' : 
-                              rec.action === 'remove' ? 'bg-red-100 text-red-800 dark:bg-red-800 dark:text-red-100' : 
-                              'bg-yellow-100 text-yellow-800 dark:bg-yellow-800 dark:text-yellow-100'}
+                            ${rec.action === 'promote' ? 'bg-[#22bb33]/10 text-[#22bb33] dark:bg-[#22bb33]/80 dark:text-[#22bb33]' : 
+                              rec.action === 'remove' ? 'bg-[#ba1d1d]/10 text-[#ba1d1d] dark:bg-[#ba1d1d]/80 dark:text-[#ba1d1d]' : 
+                              'bg-[#ba1d1d]/10 text-[#ba1d1d] dark:bg-[#ba1d1d]/80 dark:text-[#ba1d1d]'}
                           `}>
                             {rec.action === 'promote' ? 'Promotion Recommended' :
                              rec.action === 'remove' ? 'Consider Removing' :
@@ -394,30 +406,65 @@ export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsPr
         </TabsContent>
 
         <TabsContent value="pairings" className="space-y-4">
+          {/* Move summary stats above pairings and recommendations */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <Card className="bg-white shadow-sm rounded-xl border border-gray-100">
+              <CardContent className="pt-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center">
+                    <span className="material-icons text-[#ba1d1d]">receipt_long</span>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold">{foodPairings?.totalOrders || 0}</p>
+                    <p className="text-sm text-gray-600">Total Orders Analyzed</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="bg-white shadow-sm rounded-xl border border-gray-100">
+              <CardContent className="pt-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center">
+                    <span className="material-icons text-[#22bb33]">restaurant</span>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold">{foodPairings?.totalPairings || 0}</p>
+                    <p className="text-sm text-gray-600">Unique Pairings Found</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="bg-white shadow-sm rounded-xl border border-gray-100">
+              <CardContent className="pt-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center">
+                    <span className="material-icons text-[#ba1d1d]">trending_up</span>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold">{foodPairings?.recommendations?.length || 0}</p>
+                    <p className="text-sm text-gray-600">AI Recommendations</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Top Food Pairings */}
-            <Card className="bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/50 dark:to-emerald-900/50">
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle className="flex items-center gap-2">
-                      <span className="material-icons text-green-600">restaurant</span>
-                      Top Food Pairings
-                    </CardTitle>
-                    <CardDescription>Most frequently ordered together</CardDescription>
-                  </div>
-                  <Badge className="bg-green-100 text-green-800 dark:bg-green-800 dark:text-green-100">
-                    {foodPairings?.totalPairings || 0} pairs found
-                  </Badge>
-                </div>
+            <Card className="bg-white shadow-sm rounded-xl border border-gray-100">
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-lg font-semibold text-[#373643]">
+                  <span className="material-icons text-base" style={{ color: BRAND_GREEN }}>restaurant</span>
+                  Top Food Pairings
+                </CardTitle>
+                <CardDescription className="text-xs text-gray-500">Most frequently ordered together</CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="pt-0">
                 <ScrollArea className="h-[400px] pr-4">
                   <div className="space-y-4">
                     {foodPairings?.topPairings.map((pairing, index) => (
                       <div key={index} className="flex items-center justify-between p-4 bg-white/60 dark:bg-white/10 rounded-lg hover:bg-white/80 dark:hover:bg-white/20 transition-all">
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-green-100 dark:bg-green-800 flex items-center justify-center text-green-600 dark:text-green-200 font-bold">
+                          <div className="w-10 h-10 rounded-full bg-[#22bb33]/10 dark:bg-[#22bb33]/80 flex items-center justify-center text-[#22bb33] dark:text-[#22bb33]/20 font-bold">
                             {index + 1}
                           </div>
                           <div>
@@ -439,17 +486,17 @@ export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsPr
             </Card>
 
             {/* Pairing Recommendations */}
-            <Card className="bg-gradient-to-br from-purple-50 to-indigo-50 dark:from-purple-900/50 dark:to-indigo-900/50">
+            <Card className="bg-white shadow-sm rounded-xl border border-gray-100">
               <CardHeader>
                 <div className="flex items-start justify-between">
                   <div>
                     <CardTitle className="flex items-center gap-2">
-                      <span className="material-icons text-purple-600">lightbulb</span>
+                      <span className="material-icons text-[#ba1d1d]">lightbulb</span>
                       Pairing Recommendations
                     </CardTitle>
                     <CardDescription>AI suggestions for menu optimization</CardDescription>
                   </div>
-                  <Badge className="bg-purple-100 text-purple-800 dark:bg-purple-800 dark:text-purple-100">
+                  <Badge className="bg-[#ba1d1d]/10 text-[#ba1d1d] dark:bg-[#ba1d1d]/80 dark:text-[#ba1d1d]">
                     Smart Insights
                   </Badge>
                 </div>
@@ -461,7 +508,7 @@ export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsPr
                       <div key={index} className="p-4 bg-white/80 dark:bg-gray-800/50 rounded-lg hover:shadow-md transition-all">
                         <div className="flex items-center gap-3 mb-3">
                           <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                            rec.type === 'combo_meal' ? 'bg-blue-100 text-blue-600' : 'bg-yellow-100 text-yellow-600'
+                            rec.type === 'combo_meal' ? 'bg-[#22bb33]/10 text-[#22bb33]' : 'bg-[#ba1d1d]/10 text-[#ba1d1d]'
                           }`}>
                             <span className="material-icons">
                               {rec.type === 'combo_meal' ? 'restaurant_menu' : 'suggestions'}
@@ -469,8 +516,8 @@ export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsPr
                           </div>
                           <div>
                             <Badge className={`
-                              ${rec.type === 'combo_meal' ? 'bg-blue-100 text-blue-800 dark:bg-blue-800 dark:text-blue-100' : 
-                                'bg-yellow-100 text-yellow-800 dark:bg-yellow-800 dark:text-yellow-100'}
+                              ${rec.type === 'combo_meal' ? 'bg-[#22bb33]/10 text-[#22bb33] dark:bg-[#22bb33]/80 dark:text-[#22bb33]' : 
+                                'bg-[#ba1d1d]/10 text-[#ba1d1d] dark:bg-[#ba1d1d]/80 dark:text-[#ba1d1d]'}
                             `}>
                               {rec.type === 'combo_meal' ? 'Combo Meal' : 'Suggest Pairing'}
                             </Badge>
@@ -492,60 +539,18 @@ export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsPr
               </CardContent>
             </Card>
           </div>
-
-          {/* Pairings Summary Stats */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Card className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/50 dark:to-blue-800/50">
-              <CardContent className="pt-6">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-full bg-blue-100 dark:bg-blue-800 flex items-center justify-center">
-                    <span className="material-icons text-blue-600 dark:text-blue-200">receipt_long</span>
-                  </div>
-                  <div>
-                    <p className="text-2xl font-bold">{foodPairings?.totalOrders || 0}</p>
-                    <p className="text-sm text-gray-600 dark:text-gray-300">Total Orders Analyzed</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="bg-gradient-to-br from-green-50 to-green-100 dark:from-green-900/50 dark:to-green-800/50">
-              <CardContent className="pt-6">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-full bg-green-100 dark:bg-green-800 flex items-center justify-center">
-                    <span className="material-icons text-green-600 dark:text-green-200">restaurant</span>
-                  </div>
-                  <div>
-                    <p className="text-2xl font-bold">{foodPairings?.totalPairings || 0}</p>
-                    <p className="text-sm text-gray-600 dark:text-gray-300">Unique Pairings Found</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/50 dark:to-purple-800/50">
-              <CardContent className="pt-6">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-full bg-purple-100 dark:bg-purple-800 flex items-center justify-center">
-                    <span className="material-icons text-purple-600 dark:text-purple-200">trending_up</span>
-                  </div>
-                  <div>
-                    <p className="text-2xl font-bold">{foodPairings?.recommendations?.length || 0}</p>
-                    <p className="text-sm text-gray-600 dark:text-gray-300">AI Recommendations</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
         </TabsContent>
 
         <TabsContent value="categories" className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Category Distribution */}
-            <Card>
+            <Card className="bg-white shadow-sm rounded-xl border border-gray-100">
               <CardHeader>
-                <CardTitle>Food Categories</CardTitle>
-                <CardDescription>Distribution by category</CardDescription>
+                <CardTitle className="flex items-center gap-2 text-lg font-semibold text-[#373643]">
+                  <span className="material-icons text-base" style={{ color: BRAND_GRAY }}>category</span>
+                  Food Categories
+                </CardTitle>
+                <CardDescription className="text-xs text-gray-500">Distribution by category</CardDescription>
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={300}>
@@ -557,7 +562,7 @@ export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsPr
                       label
                     >
                       {menuAnalytics?.categoryBreakdown.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        <Cell key={`cell-${index}`} fill={BRAND_COLORS[index % BRAND_COLORS.length]} />
                       ))}
                     </Pie>
                     <Tooltip />
@@ -567,10 +572,13 @@ export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsPr
             </Card>
 
             {/* Category Revenue */}
-            <Card>
+            <Card className="bg-white shadow-sm rounded-xl border border-gray-100">
               <CardHeader>
-                <CardTitle>Category Revenue</CardTitle>
-                <CardDescription>Revenue by food category</CardDescription>
+                <CardTitle className="flex items-center gap-2 text-lg font-semibold text-[#373643]">
+                  <span className="material-icons text-base" style={{ color: BRAND_GRAY }}>receipt_long</span>
+                  Category Revenue
+                </CardTitle>
+                <CardDescription className="text-xs text-gray-500">Revenue by food category</CardDescription>
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={300}>
@@ -581,7 +589,7 @@ export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsPr
                     <Tooltip />
                     <Bar dataKey="revenue" fill="#8884d8">
                       {menuAnalytics?.categoryBreakdown.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        <Cell key={`cell-${index}`} fill={BRAND_COLORS[index % BRAND_COLORS.length]} />
                       ))}
                     </Bar>
                   </BarChart>
@@ -593,17 +601,31 @@ export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsPr
 
         <TabsContent value="demand" className="space-y-6">
           {/* Explanation Card */}
-          <Card className="bg-blue-50 dark:bg-blue-900/30 border-blue-200">
+          <Card className="bg-white shadow-sm rounded-xl border border-gray-100">
             <CardContent className="pt-6">
               <div className="flex items-start gap-4">
-                <div className="w-12 h-12 rounded-full bg-blue-100 dark:bg-blue-800 flex items-center justify-center">
-                  <span className="material-icons text-2xl text-blue-600 dark:text-blue-200">auto_awesome</span>
+                <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center">
+                  <span className="material-icons text-2xl text-[#ba1d1d]">auto_awesome</span>
                 </div>
                 <div>
                   <h3 className="text-lg font-semibold mb-1">AI-Powered Demand Prediction</h3>
                   <p className="text-sm text-gray-600 dark:text-gray-300">
                     Our AI analyzes your historical sales data, seasonal patterns, and real-time trends to predict demand for each menu item. These predictions help you optimize inventory and reduce waste.
                   </p>
+                  <div className="mt-3 flex items-center gap-4 text-xs text-gray-500">
+                    <span className="flex items-center gap-1">
+                      <span className="w-2 h-2 bg-[#22bb33] rounded-full"></span>
+                      High Confidence (80%+)
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-2 h-2 bg-[#ba1d1d] rounded-full"></span>
+                      Medium Confidence (60-79%)
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-2 h-2 bg-[#373643] rounded-full"></span>
+                      Low Confidence (&lt;60%)
+                    </span>
+                  </div>
                 </div>
               </div>
             </CardContent>
@@ -611,83 +633,143 @@ export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsPr
 
           {/* Demand Predictions Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {demandPredictions.map((prediction, index) => (
-              <Card key={index} className={`
-                transition-all hover:shadow-lg
-                ${prediction.trend === 'up' ? 'bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/30 dark:to-emerald-900/30' : 
-                  prediction.trend === 'down' ? 'bg-gradient-to-br from-red-50 to-pink-50 dark:from-red-900/30 dark:to-pink-900/30' : 
-                  'bg-gradient-to-br from-yellow-50 to-orange-50 dark:from-yellow-900/30 dark:to-orange-900/30'}
-              `}>
-                <CardHeader>
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className={`
-                        w-10 h-10 rounded-full flex items-center justify-center
-                        ${prediction.trend === 'up' ? 'bg-green-100 text-green-600 dark:bg-green-800 dark:text-green-200' : 
-                          prediction.trend === 'down' ? 'bg-red-100 text-red-600 dark:bg-red-800 dark:text-red-200' : 
-                          'bg-yellow-100 text-yellow-600 dark:bg-yellow-800 dark:text-yellow-200'}
-                      `}>
-                        <span className="material-icons">
-                          {prediction.trend === 'up' ? 'trending_up' : 
-                           prediction.trend === 'down' ? 'trending_down' : 
-                           'trending_flat'}
-                        </span>
-                      </div>
-                      <div>
-                        <h4 className="font-semibold text-lg">{prediction.item}</h4>
-                        <p className="text-sm text-gray-600 dark:text-gray-300">Predicted Demand</p>
-                      </div>
-                    </div>
-                    <Badge className={`
-                      ${prediction.trend === 'up' ? 'bg-green-100 text-green-800 dark:bg-green-800 dark:text-green-100' : 
-                        prediction.trend === 'down' ? 'bg-red-100 text-red-800 dark:bg-red-800 dark:text-red-100' : 
-                        'bg-yellow-100 text-yellow-800 dark:bg-yellow-800 dark:text-yellow-100'}
-                    `}>
-                      {prediction.trend === 'up' ? '↑' : prediction.trend === 'down' ? '↓' : '→'} {prediction.predictedDemand} units
-                    </Badge>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    {/* Peak Hours */}
-                    <div className="bg-white/60 dark:bg-gray-800/50 rounded-lg p-3">
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="material-icons text-gray-600 dark:text-gray-300">schedule</span>
-                        <span className="font-medium">Peak Hours</span>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {prediction.peakHours.map((hour, i) => (
-                          <Badge key={i} variant="outline" className="bg-white/80 dark:bg-gray-700">
-                            {hour}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
+            {demandPredictions.map((prediction, index) => {
+              // Get timeframe-specific labels
+              const getTimeframeLabel = () => {
+                switch (timeframe) {
+                  case 'day':
+                    return 'today';
+                  case 'week':
+                    return 'this week';
+                  case 'month':
+                    return 'this month';
+                  default:
+                    return 'this period';
+                }
+              };
 
-                    {/* Confidence Score */}
-                    <div className="bg-white/60 dark:bg-gray-800/50 rounded-lg p-3">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <span className="material-icons text-gray-600 dark:text-gray-300">analytics</span>
-                          <span className="font-medium">Prediction Confidence</span>
+              const getPredictionLabel = () => {
+                switch (timeframe) {
+                  case 'day':
+                    return 'units tomorrow';
+                  case 'week':
+                    return 'units next week';
+                  case 'month':
+                    return 'units next month';
+                  default:
+                    return 'units';
+                }
+              };
+
+              const getCurrentPeriodLabel = () => {
+                switch (timeframe) {
+                  case 'day':
+                    return 'orders today';
+                  case 'week':
+                    return 'orders this week';
+                  case 'month':
+                    return 'orders this month';
+                  default:
+                    return 'orders';
+                }
+              };
+
+              return (
+                <Card key={index} className="bg-white shadow-sm rounded-xl border border-gray-100 transition-all hover:shadow-lg">
+                  <CardHeader>
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center">
+                          <span className={`material-icons ${
+                            prediction.trend === 'up' ? 'text-[#22bb33]' : 
+                            prediction.trend === 'down' ? 'text-[#ba1d1d]' : 
+                            'text-[#373643]'
+                          }`}>
+                            {prediction.trend === 'up' ? 'trending_up' : 
+                             prediction.trend === 'down' ? 'trending_down' : 
+                             'trending_flat'}
+                          </span>
                         </div>
-                        <span className="font-semibold">{prediction.confidence}%</span>
+                        <div>
+                          <h4 className="font-semibold text-lg">{prediction.item}</h4>
+                          <p className="text-sm text-gray-600 dark:text-gray-300">Predicted Demand</p>
+                        </div>
                       </div>
-                      <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                        <div 
-                          className={`h-2 rounded-full ${
-                            prediction.confidence >= 80 ? 'bg-green-500' :
-                            prediction.confidence >= 60 ? 'bg-yellow-500' :
-                            'bg-red-500'
-                          }`}
-                          style={{ width: `${prediction.confidence}%` }}
-                        ></div>
+                      <Badge className={`
+                        ${prediction.trend === 'up' ? 'bg-[#22bb33]/10 text-[#22bb33] border-[#22bb33]/20' : 
+                          prediction.trend === 'down' ? 'bg-[#ba1d1d]/10 text-[#ba1d1d] border-[#ba1d1d]/20' : 
+                          'bg-[#373643]/10 text-[#373643] border-[#373643]/20'}
+                      `}>
+                        {prediction.trend === 'up' ? '↑' : prediction.trend === 'down' ? '↓' : '→'} {prediction.predictedDemand} {getPredictionLabel()}
+                      </Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4">
+                      {/* Current Period Activity */}
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <span className="material-icons text-gray-600 dark:text-gray-300">schedule</span>
+                            <span className="font-medium">Current Activity</span>
+                          </div>
+                          <span className="text-sm font-medium text-gray-700">
+                            {prediction.currentPeriodOrders} {getCurrentPeriodLabel()}
+                          </span>
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          Total: {prediction.totalOrders} orders in {getTimeframeLabel()}
+                        </div>
+                      </div>
+
+                      {/* Peak Hours */}
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="material-icons text-gray-600 dark:text-gray-300">schedule</span>
+                          <span className="font-medium">Peak Hours</span>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {prediction.peakHours.map((hour, i) => (
+                            <Badge key={i} variant="outline" className="bg-white border-gray-200 text-gray-700">
+                              {hour}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Confidence Score with Real-time Indicator */}
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <span className="material-icons text-gray-600 dark:text-gray-300">analytics</span>
+                            <span className="font-medium">Prediction Confidence</span>
+                            {prediction.confidence >= 80 && (
+                              <span className="w-2 h-2 bg-[#22bb33] rounded-full animate-pulse"></span>
+                            )}
+                          </div>
+                          <span className="font-semibold">{prediction.confidence}%</span>
+                        </div>
+                        <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                          <div 
+                            className={`h-2 rounded-full transition-all duration-300 ${
+                              prediction.confidence >= 80 ? 'bg-[#22bb33]' :
+                              prediction.confidence >= 60 ? 'bg-[#ba1d1d]' :
+                              'bg-[#373643]'
+                            }`}
+                            style={{ width: `${prediction.confidence}%` }}
+                          ></div>
+                        </div>
+                        <div className="mt-2 text-xs text-gray-500">
+                          {prediction.confidence >= 80 ? 'High confidence - Strong data patterns' :
+                           prediction.confidence >= 60 ? 'Medium confidence - Limited recent data' :
+                           'Low confidence - Insufficient historical data'}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
         </TabsContent>
       </Tabs>

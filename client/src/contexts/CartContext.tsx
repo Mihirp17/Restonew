@@ -12,6 +12,7 @@ interface CartContextType {
   addItem: (menuItem: MenuItem, quantity?: number, notes?: string) => void;
   removeItem: (menuItemId: number) => void;
   updateQuantity: (menuItemId: number, quantity: number) => void;
+  getItemQuantity: (menuItemId: number) => number;
   clearCart: () => void;
   itemCount: number;
   subtotal: number;
@@ -50,7 +51,23 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   };
 
   const removeItem = (menuItemId: number) => {
-    setItems(current => current.filter(item => item.menuItem.id !== menuItemId));
+    setItems(current => {
+      const existingIndex = current.findIndex(item => item.menuItem.id === menuItemId);
+      
+      if (existingIndex >= 0) {
+        const updated = [...current];
+        if (updated[existingIndex].quantity > 1) {
+          updated[existingIndex] = {
+            ...updated[existingIndex],
+            quantity: updated[existingIndex].quantity - 1
+          };
+          return updated;
+        } else {
+          return current.filter(item => item.menuItem.id !== menuItemId);
+        }
+      }
+      return current;
+    });
   };
 
   const updateQuantity = (menuItemId: number, quantity: number) => {
@@ -69,14 +86,19 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
+  const getItemQuantity = (menuItemId: number) => {
+    const item = items.find(item => item.menuItem.id === menuItemId);
+    return item ? item.quantity : 0;
+  };
+
   const clearCart = () => {
     setItems([]);
   };
 
   const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
   const subtotal = items.reduce((sum, item) => sum + (parseFloat(item.menuItem.price) * item.quantity), 0);
-  const tax = subtotal * 0.08875; // 8.875% tax
-  const total = subtotal + tax;
+  const tax = 0; // Tax is inclusive in Barcelona prices
+  const total = subtotal; // Total equals subtotal since tax is inclusive
 
   return (
     <CartContext.Provider
@@ -85,6 +107,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         addItem,
         removeItem,
         updateQuantity,
+        getItemQuantity,
         clearCart,
         itemCount,
         subtotal,

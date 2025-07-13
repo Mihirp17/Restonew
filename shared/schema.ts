@@ -154,6 +154,7 @@ export const orders = pgTable("orders", {
   customerId: integer("customer_id").notNull().references(() => customers.id),
   tableSessionId: integer("table_session_id").notNull().references(() => tableSessions.id),
   orderNumber: text("order_number").notNull().unique(), // Display-friendly order number
+  displayOrderNumber: integer("display_order_number"), // Sequential order number per restaurant
   status: text("status").notNull(), // pending, confirmed, preparing, served, completed, cancelled
   total: decimal("total", { precision: 10, scale: 2 }).notNull(),
   restaurantId: integer("restaurant_id").notNull().references(() => restaurants.id),
@@ -168,6 +169,7 @@ export const orders = pgTable("orders", {
   createdAtIdx: index("orders_created_at_idx").on(table.createdAt),
   tableSessionIdIdx: index("orders_table_session_id_idx").on(table.tableSessionId),
   customerIdIdx: index("orders_customer_id_idx").on(table.customerId),
+  displayOrderNumberIdx: index("orders_display_order_number_idx").on(table.displayOrderNumber),
   // Compound index for analytics queries
   restaurantStatusCreatedIdx: index("orders_restaurant_status_created_idx").on(table.restaurantId, table.status, table.createdAt)
 }));
