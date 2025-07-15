@@ -14,6 +14,7 @@ import BottomNavigation from "@/components/BottomNavigation";
 import { Button } from "@/components/ui/button";
 import { History, Receipt, Search } from "lucide-react";
 import type { MenuItem } from "@shared/schema";
+import BillRequestModal from "@/components/BillRequestModal";
 
 export default function CustomerMenu() {
   const params = useParams();
@@ -37,6 +38,7 @@ export default function CustomerMenu() {
   const [showBillView, setShowBillView] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [redirectChecked, setRedirectChecked] = useState(false);
+  const [showBillRequest, setShowBillRequest] = useState(false);
 
   // Initialize from URL params
   useEffect(() => {
@@ -207,6 +209,16 @@ export default function CustomerMenu() {
             <Button variant="ghost" size="sm" onClick={() => setShowBillView(true)} className="text-red-600">
               <Receipt className="h-5 w-5" />
             </Button>
+            {session && customer && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowBillRequest(true)}
+                className="text-red-600 border-red-600 rounded-full"
+              >
+                <Receipt className="h-5 w-5 mr-1" /> Request Bill
+              </Button>
+            )}
           </div>
         </div>
         <div className="mt-4 flex items-center bg-gray-100 rounded-full px-4 py-2">
@@ -318,6 +330,8 @@ export default function CustomerMenu() {
         open={showFeedbackModal} 
         onOpenChange={setShowFeedbackModal}
       />
+
+      <BillRequestModal open={showBillRequest} onOpenChange={setShowBillRequest} />
     </div>
   );
 }
