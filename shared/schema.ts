@@ -154,6 +154,7 @@ export const orders = pgTable("orders", {
   customerId: integer("customer_id").notNull().references(() => customers.id),
   tableSessionId: integer("table_session_id").notNull().references(() => tableSessions.id),
   orderNumber: text("order_number").notNull().unique(), // Display-friendly order number
+  displayOrderNumber: integer("display_order_number"), // Sequential order number per restaurant
   status: text("status").notNull(), // pending, confirmed, preparing, served, completed, cancelled
   total: decimal("total", { precision: 10, scale: 2 }).notNull(),
   restaurantId: integer("restaurant_id").notNull().references(() => restaurants.id),
@@ -168,6 +169,7 @@ export const orders = pgTable("orders", {
   createdAtIdx: index("orders_created_at_idx").on(table.createdAt),
   tableSessionIdIdx: index("orders_table_session_id_idx").on(table.tableSessionId),
   customerIdIdx: index("orders_customer_id_idx").on(table.customerId),
+  displayOrderNumberIdx: index("orders_display_order_number_idx").on(table.displayOrderNumber),
   // Compound index for analytics queries
   restaurantStatusCreatedIdx: index("orders_restaurant_status_created_idx").on(table.restaurantId, table.status, table.createdAt)
 }));
@@ -307,6 +309,19 @@ export const aiInsights = pgTable("ai_insights", {
   isReadIdx: index("ai_insights_is_read_idx").on(table.isRead)
 }));
 
+// Application Feedback Model - For restaurant staff feedback about the platform
+export const applicationFeedback = pgTable("application_feedback", {
+  id: serial("id").primaryKey().notNull(),
+  subject: text("subject").notNull(),
+  message: text("message").notNull(),
+  category: text("category").notNull(), // bug, feature_request, general, support
+  priority: text("priority").default("medium").notNull(), // low, medium, high, urgent
+  status: text("status").default("open").notNull(), // open, in_progress, resolved, closed
+  restaurantId: integer("restaurant_id").references(() => restaurants.id),
+  userId: integer("user_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Add foreign key constraints to table groups for current session
 export const tableGroupConstraints = pgTable("table_group_constraints", {
   id: serial("id").primaryKey().notNull(),
@@ -340,6 +355,7 @@ export const insertUserSchema = createInsertSchema(users).omit({ id: true, creat
 export const insertFeedbackSchema = createInsertSchema(feedback).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertGuestSessionSchema = createInsertSchema(guestSessions).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertAiInsightSchema = createInsertSchema(aiInsights).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertApplicationFeedbackSchema = createInsertSchema(applicationFeedback).omit({ id: true, createdAt: true });
 
 // Select Types
 export type PlatformAdmin = typeof platformAdmins.$inferSelect;
@@ -358,6 +374,7 @@ export type User = typeof users.$inferSelect;
 export type Feedback = typeof feedback.$inferSelect;
 export type GuestSession = typeof guestSessions.$inferSelect;
 export type AiInsight = typeof aiInsights.$inferSelect;
+export type ApplicationFeedback = typeof applicationFeedback.$inferSelect;
 
 // Insert Types
 export type InsertPlatformAdmin = z.infer<typeof insertPlatformAdminSchema>;
@@ -376,6 +393,7 @@ export type InsertUser = z.infer<typeof insertUserSchema>;
 export type InsertFeedback = z.infer<typeof insertFeedbackSchema>;
 export type InsertGuestSession = z.infer<typeof insertGuestSessionSchema>;
 export type InsertAiInsight = z.infer<typeof insertAiInsightSchema>;
+export type InsertApplicationFeedback = z.infer<typeof insertApplicationFeedbackSchema>;
 
 // Extended types for UI components
 export interface CustomerWithOrders extends Customer {

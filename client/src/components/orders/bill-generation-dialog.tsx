@@ -106,79 +106,129 @@ export function BillGenerationDialog({
       setBillsOffset(0);
       setBillsHasMore(true);
       fetchBills(true);
+      // Always fetch latest session/orders
+      fetchTableSession();
     }
     // eslint-disable-next-line
   }, [isOpen, tableSessionId, restaurantId]);
 
   // Fetch table session data
-  useEffect(() => {
-    const fetchTableSession = async () => {
-      if (!tableSessionId || !restaurantId) return;
+  const fetchTableSession = async () => {
+    if (!tableSessionId || !restaurantId) return;
 
-      try {
-        const sessionData = await apiRequest({
-          method: 'GET',
-          url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}`
-        });
-        
-        // Fetch all orders for the session in one call
-        const allOrders = await apiRequest({
-          method: 'GET',
-          url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}/orders`
-        });
-        // Group orders by customerId
-        const ordersByCustomer: Record<number, Order[]> = {};
-        for (const order of allOrders) {
-          if (!ordersByCustomer[order.customerId]) ordersByCustomer[order.customerId] = [];
-          ordersByCustomer[order.customerId].push(order);
+    try {
+      const sessionData = await apiRequest({
+        method: 'GET',
+        url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}`
+      });
+      
+      // Fetch all orders for the session in one call
+      const allOrders = await apiRequest({
+        method: 'GET',
+        url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}/orders`
+      });
+      console.log('🔍 Bill Generation Debug - All orders fetched:', allOrders);
+      console.log('🔍 Bill Generation Debug - Orders count:', allOrders?.length || 0);
+      console.log('🔍 Bill Generation Debug - Session ID:', tableSessionId);
+      console.log('🔍 Bill Generation Debug - Restaurant ID:', restaurantId);
+      
+      // If no orders found, try to get orders by restaurant and filter by customers
+      let finalOrders = allOrders;
+      if (!allOrders || allOrders.length === 0) {
+        console.log('🔍 No orders found for session, trying fallback approach...');
+        try {
+          // Get all orders for the restaurant
+          const allRestaurantOrders = await apiRequest({
+            method: 'GET',
+            url: `/api/restaurants/${restaurantId}/orders`
+          });
+          console.log('🔍 Fallback - All restaurant orders:', allRestaurantOrders?.length || 0);
+          
+          // Filter orders by customers in this session
+          const customerIds = (sessionData.customers || []).map((c: Customer) => c.id);
+          const sessionOrders = allRestaurantOrders.filter((order: any) => 
+            customerIds.includes(order.customerId)
+          );
+          console.log('🔍 Fallback - Session orders found:', sessionOrders.length);
+          console.log('🔍 Fallback - Customer IDs:', customerIds);
+          console.log('🔍 Fallback - Session orders:', sessionOrders);
+          
+          finalOrders = sessionOrders;
+        } catch (fallbackError) {
+          console.error('🔍 Fallback approach failed:', fallbackError);
         }
-        // Attach orders and totals to each customer
-        const customersWithOrders = (sessionData.customers || []).map((customer: Customer) => {
-          const orders = ordersByCustomer[customer.id] || [];
-          const customerTotal = orders.reduce((sum: number, order: Order) => sum + parseFloat(order.total), 0);
-          return {
-            ...customer,
-            orders,
-            totalAmount: customerTotal
-          };
-        });
-
-        // Check for existing bills
-        const sessionBills = await apiRequest({
-          method: 'GET',
-          url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}/bills`
-        });
-
-        // Add bill status to customers
-        const customersWithBillStatus = customersWithOrders.map(customer => ({
+      }
+      
+      // Group orders by customerId
+      const ordersByCustomer: Record<number, Order[]> = {};
+      for (const order of finalOrders) {
+        if (!ordersByCustomer[order.customerId]) ordersByCustomer[order.customerId] = [];
+        ordersByCustomer[order.customerId].push(order);
+      }
+      // Attach orders and totals to each customer
+      const customersWithOrders = (sessionData.customers || []).map((customer: Customer) => {
+        const orders = ordersByCustomer[customer.id] || [];
+        const customerTotal = orders.reduce((sum: number, order: Order) => sum + parseFloat(order.total), 0);
+        console.log(`🔍 Customer ${customer.name} - Orders:`, orders.length, 'Total:', customerTotal);
+        return {
           ...customer,
-          existingBill: sessionBills.find((bill: any) => bill.customerId === customer.id),
-          hasExistingBill: sessionBills.some((bill: any) => bill.customerId === customer.id)
-        }));
+          orders,
+          totalAmount: customerTotal
+        };
+      });
 
-        setTableSession({
-          ...sessionData,
-          customers: customersWithBillStatus
-        });
-        
-        // Set default selected customers based on split type
-        if (sessionData.splitType === 'individual') {
-          setSelectedCustomers([]);
-        } else if (sessionData.splitType === 'combined') {
-          setSelectedCustomers(customersWithOrders.map((c: Customer) => c.id));
-        }
-      } catch (error) {
-        console.error('Error fetching table session:', error);
+      // Check for existing bills
+      const sessionBills = await apiRequest({
+        method: 'GET',
+        url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}/bills`
+      });
+
+      // Add bill status to customers
+      const customersWithBillStatus = customersWithOrders.map((customer: Customer) => ({
+        ...customer,
+        existingBill: sessionBills.find((bill: any) => bill.customerId === customer.id),
+        hasExistingBill: sessionBills.some((bill: any) => bill.customerId === customer.id)
+      }));
+
+      setTableSession({
+        ...sessionData,
+        customers: customersWithBillStatus
+      });
+      
+      // Set default selected customers based on split type
+      if (sessionData.splitType === 'individual') {
+        setSelectedCustomers([]);
+      } else if (sessionData.splitType === 'combined') {
+        setSelectedCustomers(customersWithOrders.map((c: Customer) => c.id));
+      }
+
+      // When selecting customers in custom mode, don't select ones with existing bills
+      if (sessionData.splitType === 'custom') {
+        const eligibleCustomers = customersWithBillStatus
+          .filter((c: Customer) => !c.hasExistingBill)
+          .map((c: Customer) => c.id);
+        setSelectedCustomers(eligibleCustomers);
+      }
+    } catch (error: any) {
+      // Detect 404
+      if (error?.response?.status === 404) {
         toast({
-          title: "Error",
-          description: "Failed to load table session data",
+          title: "Session Ended",
+          description: "This session no longer exists or has ended. The list will refresh.",
           variant: "destructive"
         });
+        onOpenChange(false); // Close dialog
+        if (typeof (window as any).refreshSessions === "function") (window as any).refreshSessions();
+        return;
       }
-    };
-
-    fetchTableSession();
-  }, [tableSessionId, restaurantId, toast]);
+      console.error('Error fetching table session:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load table session data",
+        variant: "destructive"
+      });
+    }
+  };
 
   const calculateTotal = (customerIds: number[]) => {
     if (!tableSession || !tableSession.customers) return 0;
@@ -214,6 +264,20 @@ export function BillGenerationDialog({
       });
       return;
     }
+    
+    // Check if there are any orders at all
+    const customersWithOrders = tableSession.customers.filter(customer => 
+      customer.orders?.length > 0 && customer.totalAmount > 0
+    );
+    
+    if (customersWithOrders.length === 0) {
+      toast({
+        title: "No Orders", 
+        description: "Cannot generate bills because there are no orders for this session",
+        variant: "destructive"
+      });
+      return;
+    }
 
     try {
       setIsGenerating(true);
@@ -224,8 +288,13 @@ export function BillGenerationDialog({
         let skipCount = 0;
         
         for (const customer of tableSession.customers) {
-          if (customer.totalAmount > 0) {
-            const total = customer.totalAmount;
+          // Skip customers with no orders or zero total
+          if (customer.totalAmount <= 0 || !customer.orders?.length) {
+            console.log(`Skipping bill for ${customer.name} - no orders`);
+            continue;
+          }
+
+          const total = customer.totalAmount;
 
             const billData = {
               billNumber: generateBillNumber(),
@@ -257,7 +326,6 @@ export function BillGenerationDialog({
               }
             }
           }
-        }
 
         if (successCount > 0 && skipCount > 0) {
           toast({
@@ -340,7 +408,9 @@ export function BillGenerationDialog({
       }
 
       onBillGenerated?.();
+      fetchBills(true);
       onOpenChange(false);
+      if (typeof (window as any).refreshSessions === "function") (window as any).refreshSessions();
 
     } catch (error) {
       console.error('Error generating bills:', error);
@@ -363,6 +433,18 @@ export function BillGenerationDialog({
   };
 
   const handleCustomerToggle = (customerId: number) => {
+    // Find the customer to check if they already have a bill
+    const customer = tableSession?.customers?.find(c => c.id === customerId);
+    
+    if (customer?.hasExistingBill) {
+      toast({
+        title: "Cannot Add Customer",
+        description: `${customer.name} already has a bill for this session.`,
+        variant: "destructive"
+      });
+      return;
+    }
+    
     setSelectedCustomers(prev => 
       prev.includes(customerId)
         ? prev.filter(id => id !== customerId)
@@ -376,10 +458,11 @@ export function BillGenerationDialog({
     return (
       <Dialog open={isOpen} onOpenChange={onOpenChange}>
         <DialogContent>
-          <div className="flex items-center justify-center p-8">
+          <div className="flex flex-col items-center justify-center p-8">
             <div className="text-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
-              <p>Loading session data...</p>
+              <div className="text-2xl text-[#ba1d1d] mb-2">Error</div>
+              <p className="mb-4 text-[#373643]">Failed to load table session data. Please check the session or try again.</p>
+              <Button onClick={() => onOpenChange(false)} className="bg-[#ba1d1d] text-white hover:bg-[#a11414]">Cancel</Button>
             </div>
           </div>
         </DialogContent>
@@ -389,53 +472,51 @@ export function BillGenerationDialog({
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center space-x-2">
-            <Receipt className="h-5 w-5 text-green-600" />
-                          <span>Generate Bills - Table {tableSession.table?.number || 'Unknown'}</span>
-            <Badge variant="outline">
-              {tableSession.partySize} {tableSession.partySize === 1 ? 'person' : 'people'}
-            </Badge>
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto bg-[#ffffff] border border-[#373643]/10 shadow-xl rounded-xl p-0">
+        <DialogHeader className="px-6 pt-6 pb-2 border-b border-[#373643]/10">
+          <DialogTitle className="flex items-center space-x-2 text-[#373643] text-base font-semibold">
+            <Receipt className="h-5 w-5 text-[#ba1d1d]" />
+            <span>Generate Bills - Table {tableSession.table?.number || 'No Table Assigned'}</span>
+            <Badge variant="outline" className="bg-[#f5f5f5] text-xs text-[#373643]/60 border-[#e5e5e5]">{tableSession.partySize} {tableSession.partySize === 1 ? 'person' : 'people'}</Badge>
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-6">
+        <div className="space-y-6 px-6 py-4">
             {/* Bill Type Selection */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Bill Type</CardTitle>
+            <Card className="bg-[#f9f9f9] border border-[#e5e5e5]">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-[#373643]">Bill Type</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <Button
                     variant={selectedBillType === 'individual' ? 'default' : 'outline'}
-                    className="h-20 flex flex-col items-center justify-center"
+                    className={`h-20 flex flex-col items-center justify-center border-[#373643]/10 ${selectedBillType === 'individual' ? 'bg-[#ba1d1d] text-white' : 'bg-[#f5f5f5] text-[#373643]'} text-sm`}
                     onClick={() => setSelectedBillType('individual')}
                   >
                     <User className="h-6 w-6 mb-2" />
                     <span>Individual Bills</span>
-                    <span className="text-xs opacity-70">Separate bill per person</span>
+                    <span className="text-xs text-[#373643]/60">Separate bill per person</span>
                   </Button>
                   
                   <Button
                     variant={selectedBillType === 'combined' ? 'default' : 'outline'}
-                    className="h-20 flex flex-col items-center justify-center"
+                    className={`h-20 flex flex-col items-center justify-center border-[#373643]/10 ${selectedBillType === 'combined' ? 'bg-[#ba1d1d] text-white' : 'bg-[#f5f5f5] text-[#373643]'} text-sm`}
                     onClick={() => setSelectedBillType('combined')}
                   >
                     <Users className="h-6 w-6 mb-2" />
                     <span>Combined Bill</span>
-                    <span className="text-xs opacity-70">Single bill for all</span>
+                    <span className="text-xs text-[#373643]/60">Single bill for all</span>
                   </Button>
                   
                   <Button
                     variant={selectedBillType === 'custom' ? 'default' : 'outline'}
-                    className="h-20 flex flex-col items-center justify-center"
+                    className={`h-20 flex flex-col items-center justify-center border-[#373643]/10 ${selectedBillType === 'custom' ? 'bg-[#ba1d1d] text-white' : 'bg-[#f5f5f5] text-[#373643]'} text-sm`}
                     onClick={() => setSelectedBillType('custom')}
                   >
                     <Calculator className="h-6 w-6 mb-2" />
                     <span>Custom Split</span>
-                    <span className="text-xs opacity-70">Select specific people</span>
+                    <span className="text-xs text-[#373643]/60">Select specific people</span>
                   </Button>
                 </div>
               </CardContent>
@@ -443,42 +524,42 @@ export function BillGenerationDialog({
 
             {/* Customer Selection for Custom Split */}
             {selectedBillType === 'custom' && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Select Customers</CardTitle>
+              <Card className="bg-[#f9f9f9] border border-[#e5e5e5]">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-[#373643]">Select Customers</CardTitle>
                 </CardHeader>
                 <CardContent>
                   {tableSession.customers && tableSession.customers.length > 0 ? (
                     <div className="space-y-2">
                       {tableSession.customers.map(customer => (
-                        <div key={customer.id} className="flex items-center justify-between p-3 border rounded-lg">
+                        <div key={customer.id} className="flex items-center justify-between p-3 border border-[#e5e5e5] rounded-lg bg-[#ffffff]">
                           <div className="flex items-center space-x-3">
                             <input
                               type="checkbox"
                               checked={selectedCustomers.includes(customer.id)}
                               onChange={() => handleCustomerToggle(customer.id)}
-                              className="rounded"
+                              className="rounded border-[#ba1d1d] focus:ring-[#ba1d1d]"
                             />
                             <div>
                               <div className="flex items-center space-x-2">
-                                <span className="font-medium">{customer.name}</span>
+                                <span className="font-medium text-[#373643]">{customer.name}</span>
                                 {customer.isMainCustomer && (
-                                  <Badge variant="default" className="text-xs">Main</Badge>
+                                  <Badge variant="default" className="text-xs bg-[#ba1d1d]/10 text-[#ba1d1d] border-none">Main</Badge>
                                 )}
                               </div>
-                              <span className="text-sm text-gray-500">
+                              <span className="text-xs text-[#373643]/60">
                                 {customer.orders?.length || 0} order{(customer.orders?.length || 0) !== 1 ? 's' : ''}
                               </span>
                             </div>
                           </div>
                           <div className="text-right">
-                            <span className="font-medium">{formatCurrency(customer.totalAmount)}</span>
+                            <span className="font-medium text-[#ba1d1d]">{formatCurrency(customer.totalAmount)}</span>
                           </div>
                         </div>
                       ))}
                     </div>
                   ) : (
-                    <div className="text-center py-4 text-gray-500">
+                    <div className="text-center py-4 text-[#373643]/60">
                       No customers found for this session
                     </div>
                   )}
@@ -487,11 +568,27 @@ export function BillGenerationDialog({
             )}
 
             {/* Bill Preview */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Bill Preview</CardTitle>
+            <Card className="bg-[#f9f9f9] border border-[#e5e5e5]">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-[#373643]">Bill Preview</CardTitle>
               </CardHeader>
               <CardContent>
+                {/* Check if there are any orders at all */}
+                {tableSession.customers && tableSession.customers.filter(c => c.orders?.length > 0 && c.totalAmount > 0).length === 0 ? (
+                  <div className="text-center py-8 space-y-4">
+                    <div className="text-4xl">🛒</div>
+                    <div className="space-y-2">
+                      <h3 className="font-medium text-[#373643]">No Orders Yet</h3>
+                      <p className="text-sm text-[#373643]/60">
+                        Customers haven't placed any orders yet. Bills can only be generated after orders are placed.
+                      </p>
+                    </div>
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
+                      💡 Tip: Customers can scan the QR code on their table to view the menu and place orders
+                    </div>
+                  </div>
+                ) : (
+                  <div>
                 {selectedBillType === 'individual' && (
                   <div className="space-y-4">
                     {tableSession.customers && tableSession.customers.length > 0 ? (
@@ -595,32 +692,32 @@ export function BillGenerationDialog({
                     </div>
                   </div>
                 )}
+                  </div>
+                )}
               </CardContent>
             </Card>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="px-6 pb-6 pt-0 border-t border-[#373643]/10">
           <Button
-            variant="outline"
             onClick={() => onOpenChange(false)}
+            className="bg-[#ba1d1d] text-white hover:bg-[#a11414] border-none shadow-sm"
           >
             Cancel
           </Button>
           <Button
             onClick={handleGenerateBills}
-            disabled={isGenerating || (selectedBillType === 'custom' && selectedCustomers.length === 0)}
-            className="bg-green-600 hover:bg-green-700"
+            disabled={isGenerating || 
+              (selectedBillType === 'custom' && selectedCustomers.length === 0) ||
+              (tableSession.customers && tableSession.customers.filter(c => c.orders?.length > 0 && c.totalAmount > 0).length === 0)
+            }
+            variant="success"
+            className="shadow-sm"
           >
             {isGenerating ? (
-              <span className="flex items-center">
-                <span className="animate-spin mr-2 h-4 w-4 border-2 border-white border-t-transparent rounded-full"></span>
-                Generating...
-              </span>
+              <span className="flex items-center"><span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></span>Generating...</span>
             ) : (
-              <>
-                <Receipt className="h-4 w-4 mr-2" />
-                Generate Bills
-              </>
+              <><Receipt className="h-4 w-4 mr-2" /> Generate Bills</>
             )}
           </Button>
         </DialogFooter>

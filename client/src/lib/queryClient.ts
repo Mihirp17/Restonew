@@ -1,4 +1,5 @@
-import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { QueryClient, QueryFunction } from '@tanstack/react-query';
+import { createCacheManager } from './cache-manager';
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
@@ -30,7 +31,7 @@ export const getQueryFn: <T>(options: {
   on401: UnauthorizedBehavior;
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
-  async ({ queryKey }) => {
+  async ({ queryKey }: { queryKey: readonly unknown[] }) => {
     const res = await fetch(queryKey[0] as string, {
       credentials: "include",
     });
@@ -43,17 +44,28 @@ export const getQueryFn: <T>(options: {
     return await res.json();
   };
 
+// Create a client
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      queryFn: getQueryFn({ on401: "throw" }),
-      refetchInterval: false,
-      refetchOnWindowFocus: false,
-      staleTime: Infinity,
-      retry: false,
+      staleTime: 15000, // 15 seconds
+      gcTime: 1000 * 60 * 5, // 5 minutes
+      retry: 1,
+      retryDelay: attemptIndex => Math.min(1000 * 2 ** attemptIndex, 30000), // Exponential backoff with max delay of 30 seconds
+      networkMode: 'online',
     },
     mutations: {
-      retry: false,
+      networkMode: 'online',
+      retry: 0,
     },
   },
 });
+
+// Initialize the cache manager with our query client
+export const cacheManager = createCacheManager(queryClient);
+
+// Export a function to reset the query client and cache manager (useful for testing or user logout)
+export function resetQueryClientAndCache(): void {
+  queryClient.clear();
+  cacheManager.clearAll();
+}

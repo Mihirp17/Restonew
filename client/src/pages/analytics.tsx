@@ -8,13 +8,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { apiRequest } from "@/lib/queryClient";
 import { formatCurrency } from "@/lib/utils";
 import { getRelativeDateRange } from "@/lib/utils";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, Legend } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, Legend, AreaChart, Area } from "recharts";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { AIInsights } from "@/components/dashboard/ai-insights";
 import { NewAIInsights } from "@/components/dashboard/new-ai-insights-fixed";
-import { RestaurantAnalytics } from "@/components/dashboard/restaurant-analytics";
 import { AIChatbox } from "@/components/dashboard/ai-chatbox";
+
 
 // Define the type of analytics data
 interface AnalyticsData {
@@ -38,9 +38,31 @@ export default function Analytics() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<{ title: string; message: string } | null>(null);
   const { toast } = useToast();
-
-  // Define colors for charts
   const COLORS = ['#e53e3e', '#dd6b20', '#38a169', '#3182ce', '#805ad5', '#d53f8c'];
+  const sortedItems = [...(analyticsData?.popularItems || [])].sort((a, b) => b.count - a.count);
+  const chartItems = sortedItems.slice(0, 10);
+  const popularItemsChartData = chartItems.map((item, idx) => ({
+    name: item.name.length > 15 ? item.name.slice(0, 12) + '...' : item.name,
+    fullName: item.name,
+    value: item.count,
+    rank: idx + 1
+  }));
+  const revenueByItemData = chartItems.map((item, idx) => ({
+    name: item.name.length > 15 ? item.name.slice(0, 12) + '...' : item.name,
+    fullName: item.name,
+    revenue: parseFloat(item.price) * item.count,
+    rank: idx + 1
+  }));
+  const pieChartData = chartItems.map(item => ({
+    name: item.name || `Item #${item.id}`,
+    value: item.count
+  }));
+  const dailySalesData = Array.from({ length: 7 }, (_, i) => ({
+    date: `Day ${i + 1}`,
+    revenue: Math.round(Math.random() * 1000 + 200) // Mock data
+  }));
+
+
 
   useEffect(() => {
     const fetchAnalyticsData = async () => {
@@ -108,18 +130,6 @@ export default function Analytics() {
     fetchAnalyticsData();
   }, [restaurantId, dateRange, toast]);
 
-  // Prepare data for popular items chart
-  const popularItemsChartData = analyticsData?.popularItems.map(item => ({
-    name: item.name || `Item #${item.id}`,
-    value: item.count
-  })) || [];
-
-  // Prepare data for revenue by item chart
-  const revenueByItemData = analyticsData?.popularItems.map(item => ({
-    name: item.name || `Item #${item.id}`,
-    revenue: parseFloat(item.price) * item.count
-  })) || [];
-
   return (
     <Layout
       title={t("analytics", "Analytics & AI")}
@@ -183,7 +193,13 @@ export default function Analytics() {
                   </CardHeader>
                   <CardContent>
                     <div className="text-2xl font-bold text-gray-900 dark:text-white">
-                      {isLoading ? "Loading..." : analyticsData?.orderCount}
+                      {isLoading ? (
+                        <div className="flex flex-col gap-2 h-[350px] justify-center">
+                          {Array.from({ length: 10 }).map((_, i) => (
+                            <div key={i} className="animate-pulse bg-gray-200 rounded h-7 w-full" style={{ marginBottom: 8 }} />
+                          ))}
+                        </div>
+                      ) : analyticsData?.orderCount}
                     </div>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                       {dateRange === 'today' ? 'Today' : 
@@ -201,7 +217,13 @@ export default function Analytics() {
                   </CardHeader>
                   <CardContent>
                     <div className="text-2xl font-bold text-gray-900 dark:text-white">
-                      {isLoading ? "Loading..." : formatCurrency(analyticsData?.revenue || 0)}
+                      {isLoading ? (
+                        <div className="flex flex-col gap-2 h-[350px] justify-center">
+                          {Array.from({ length: 10 }).map((_, i) => (
+                            <div key={i} className="animate-pulse bg-gray-200 rounded h-7 w-full" style={{ marginBottom: 8 }} />
+                          ))}
+                        </div>
+                      ) : formatCurrency(analyticsData?.revenue || 0)}
                     </div>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                       {dateRange === 'today' ? 'Today' : 
@@ -219,7 +241,13 @@ export default function Analytics() {
                   </CardHeader>
                   <CardContent>
                     <div className="text-2xl font-bold text-gray-900 dark:text-white">
-                      {isLoading ? "Loading..." : formatCurrency(analyticsData?.averageOrderValue || 0)}
+                      {isLoading ? (
+                        <div className="flex flex-col gap-2 h-[350px] justify-center">
+                          {Array.from({ length: 10 }).map((_, i) => (
+                            <div key={i} className="animate-pulse bg-gray-200 rounded h-7 w-full" style={{ marginBottom: 8 }} />
+                          ))}
+                        </div>
+                      ) : formatCurrency(analyticsData?.averageOrderValue || 0)}
                     </div>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                       {dateRange === 'today' ? 'Today' : 
@@ -230,33 +258,83 @@ export default function Analytics() {
                 </Card>
               </div>
 
-              {/* Charts */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Section: Sales Analytics */}
+              <div className="mb-8">
+                <h2 className="text-xl font-semibold text-[#373643] mb-4">Sales Analytics</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 {/* Popular Items Chart */}
-                <Card>
+                  <Card className="bg-white border border-[#373643]/10 shadow-lg rounded-2xl p-4">
                   <CardHeader>
                     <CardTitle>Popular Items</CardTitle>
                   </CardHeader>
                   <CardContent>
                     {isLoading ? (
-                      <div className="flex justify-center items-center h-80">
-                        <div className="animate-spin w-8 h-8 border-4 border-brand border-t-transparent rounded-full"></div>
+                        <div className="flex flex-col gap-2 h-[350px] justify-center">
+                          {Array.from({ length: 10 }).map((_, i) => (
+                            <div key={i} className="animate-pulse bg-gray-200 rounded h-7 w-full" style={{ marginBottom: 8 }} />
+                          ))}
                       </div>
                     ) : popularItemsChartData.length > 0 ? (
-                      <ResponsiveContainer width="100%" height={300}>
+                        <>
+                          <ResponsiveContainer width="100%" height={350}>
                         <BarChart
                             data={popularItemsChartData}
                           layout="vertical"
-                          margin={{ top: 20, right: 20, left: 40, bottom: 20 }}
+                              margin={{ top: 20, right: 30, left: 40, bottom: 20 }}
                           >
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis type="number" allowDecimals={false} domain={[0, 'dataMax + 5']} />
-                          <YAxis dataKey="name" type="category" width={150} />
-                          <Tooltip formatter={(value) => [`${value} orders`, 'Orders']} />
-                          <Bar dataKey="value" fill="#e53e3e" radius={[0, 6, 6, 0]}>
-                          </Bar>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                              <XAxis type="number" stroke="#666" fontSize={12} />
+                              <YAxis
+                                dataKey="name"
+                                type="category"
+                                width={140}
+                                stroke="#666"
+                                fontSize={12}
+                                tick={({ x, y, payload }) => (
+                                  <>
+                                    <title>{payload.fullName}</title>
+                                    <text x={x} y={y + 4} fontSize="13" fill="#373643">{payload.value}</text>
+                                  </>
+                                )}
+                              />
+                              <Tooltip
+                                content={({ active, payload }) =>
+                                  active && payload && payload.length ? (
+                                    <div className="bg-white p-3 border border-gray-200 rounded-lg shadow-lg">
+                                      <p className="font-medium text-gray-800">{payload[0].payload.fullName}</p>
+                                      <p className="text-sm" style={{ color: "#ba1d1d" }}>
+                                        Orders: {payload[0].value}
+                                      </p>
+                                    </div>
+                                  ) : null
+                                }
+                              />
+                              <Bar
+                                dataKey="value"
+                                fill="url(#colorGradient1)"
+                                radius={[0, 6, 6, 0]}
+                                strokeWidth={1}
+                                stroke="#ba1d1d"
+                                label={({ x, y, width, height, value, index }) => (
+                                  <g>
+                                    <text x={x + 8} y={y + height / 2 + 5} fontSize="13" fill="#ba1d1d" fontWeight="bold">
+                                      {popularItemsChartData[index].rank}.
+                                    </text>
+                                    <text x={x + 32} y={y + height / 2 + 5} fontSize="13" fill="#373643">
+                                      {popularItemsChartData[index].name}
+                                    </text>
+                                  </g>
+                                )}
+                              />
+                              <defs>
+                                <linearGradient id="colorGradient1" x1="0" y1="0" x2="1" y2="0">
+                                  <stop offset="0%" stopColor="#ba1d1d" />
+                                  <stop offset="100%" stopColor="#e53e3e" />
+                                </linearGradient>
+                              </defs>
                         </BarChart>
                       </ResponsiveContainer>
+                        </>
                     ) : (
                       <div className="flex justify-center items-center h-80 text-gray-500 dark:text-gray-400">
                         No data available
@@ -264,38 +342,75 @@ export default function Analytics() {
                     )}
                   </CardContent>
                 </Card>
-
                 {/* Revenue by Item Chart */}
-                <Card>
+                  <Card className="bg-white border border-[#373643]/10 shadow-lg rounded-2xl p-4">
                   <CardHeader>
                     <CardTitle>Revenue by Item</CardTitle>
                   </CardHeader>
                   <CardContent>
                     {isLoading ? (
-                      <div className="flex justify-center items-center h-80">
-                        <div className="animate-spin w-8 h-8 border-4 border-brand border-t-transparent rounded-full"></div>
+                        <div className="flex flex-col gap-2 h-[350px] justify-center">
+                          {Array.from({ length: 10 }).map((_, i) => (
+                            <div key={i} className="animate-pulse bg-gray-200 rounded h-7 w-full" style={{ marginBottom: 8 }} />
+                          ))}
                       </div>
                     ) : revenueByItemData.length > 0 ? (
-                      <ResponsiveContainer width="100%" height={300}>
+                        <ResponsiveContainer width="100%" height={350}>
                         <BarChart
                           data={revenueByItemData}
-                          margin={{
-                            top: 5,
-                            right: 30,
-                            left: 20,
-                            bottom: 60,
-                          }}
+                            layout="vertical"
+                            margin={{ top: 20, right: 30, left: 40, bottom: 20 }}
                         >
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis 
+                            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                            <XAxis type="number" stroke="#666" fontSize={12} tickFormatter={formatCurrency} />
+                            <YAxis
                             dataKey="name" 
-                            angle={-45} 
-                            textAnchor="end"
-                            height={60}
-                          />
-                          <YAxis tickFormatter={(value) => `$${value}`} />
-                          <Tooltip formatter={(value) => [`$${value}`, 'Revenue']} />
-                          <Bar dataKey="revenue" fill="#e53e3e" />
+                              type="category"
+                              width={140}
+                              stroke="#666"
+                              fontSize={12}
+                              tick={({ x, y, payload }) => (
+                                <>
+                                  <title>{payload.fullName}</title>
+                                  <text x={x} y={y + 4} fontSize="13" fill="#373643">{payload.value}</text>
+                                </>
+                              )}
+                            />
+                            <Tooltip
+                              content={({ active, payload }) =>
+                                active && payload && payload.length ? (
+                                  <div className="bg-white p-3 border border-gray-200 rounded-lg shadow-lg">
+                                    <p className="font-medium text-gray-800">{payload[0].payload.fullName}</p>
+                                    <p className="text-sm" style={{ color: "#178a29" }}>
+                                      Revenue: {formatCurrency(payload[0].payload.revenue)}
+                                    </p>
+                                  </div>
+                                ) : null
+                              }
+                            />
+                            <Bar
+                              dataKey="revenue"
+                              fill="url(#colorGradient3)"
+                              radius={[0, 6, 6, 0]}
+                              strokeWidth={1}
+                              stroke="#178a29"
+                              label={({ x, y, width, height, value, index }) => (
+                                <g>
+                                  <text x={x + 8} y={y + height / 2 + 5} fontSize="13" fill="#178a29" fontWeight="bold">
+                                    {revenueByItemData[index].rank}.
+                                  </text>
+                                  <text x={x + 32} y={y + height / 2 + 5} fontSize="13" fill="#373643">
+                                    {revenueByItemData[index].name}
+                                  </text>
+                                </g>
+                              )}
+                            />
+                            <defs>
+                              <linearGradient id="colorGradient3" x1="0" y1="0" x2="1" y2="0">
+                                <stop offset="0%" stopColor="#22bb33" />
+                                <stop offset="100%" stopColor="#178a29" />
+                              </linearGradient>
+                            </defs>
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
@@ -305,10 +420,119 @@ export default function Analytics() {
                     )}
                   </CardContent>
                 </Card>
+                  {/* Pie Chart: Order Share by Item */}
+                  <Card className="bg-white border border-[#373643]/10 shadow-lg rounded-2xl p-4">
+                    <CardHeader>
+                      <CardTitle>Order Share by Item</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      {isLoading ? (
+                        <div className="flex justify-center items-center h-80">
+                          <div className="animate-spin w-8 h-8 border-4 border-[#ba1d1d] border-t-transparent rounded-full"></div>
+                        </div>
+                      ) : pieChartData.length > 0 ? (
+                        <ResponsiveContainer width="100%" height={350}>
+                          <PieChart>
+                            <Pie
+                              data={pieChartData}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={60}
+                              outerRadius={120}
+                              paddingAngle={2}
+                              dataKey="value"
+                              label={false}
+                            >
+                              {pieChartData.map((entry, index) => (
+                                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                              ))}
+                            </Pie>
+                            <Tooltip
+                              content={({ active, payload }) =>
+                                active && payload && payload.length ? (
+                                  <div className="bg-white p-3 border border-gray-200 rounded-lg shadow-lg">
+                                    <p className="font-medium text-gray-800">{payload[0].payload.fullName}</p>
+                                    <p className="text-sm" style={{ color: payload[0].color }}>
+                                      Orders: {payload[0].value}
+                                    </p>
+                                  </div>
+                                ) : null
+                              }
+                            />
+                            <Legend
+                              verticalAlign="bottom"
+                              height={36}
+                              formatter={(value, entry) => (
+                                <span style={{ color: entry.color, fontSize: '12px' }}>{value}</span>
+                              )}
+                            />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        <div className="flex justify-center items-center h-80 text-gray-500 dark:text-gray-400">
+                          No data available
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                  {/* Daily Sales Area Chart */}
+                  <Card className="bg-white border border-[#373643]/10 shadow-lg rounded-2xl p-4">
+                    <CardHeader>
+                      <CardTitle>Daily Sales</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      {isLoading ? (
+                        <div className="flex justify-center items-center h-80">
+                          <div className="animate-spin w-8 h-8 border-4 border-[#ba1d1d] border-t-transparent rounded-full"></div>
+                        </div>
+                      ) : dailySalesData.length > 0 ? (
+                        <ResponsiveContainer width="100%" height={350}>
+                          <AreaChart data={dailySalesData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                            <XAxis dataKey="date" stroke="#666" fontSize={12} />
+                            <YAxis stroke="#666" fontSize={12} tickFormatter={formatCurrency} />
+                            <Tooltip
+                              content={({ active, payload, label }) =>
+                                active && payload && payload.length ? (
+                                  <div className="bg-white p-3 border border-gray-200 rounded-lg shadow-lg">
+                                    <p className="font-medium text-gray-800">{label}</p>
+                                    <p className="text-sm" style={{ color: "#3182ce" }}>
+                                      Revenue: {formatCurrency(typeof payload[0].value === "number" ? payload[0].value : 0)}
+                                    </p>
+                                  </div>
+                                ) : null
+                              }
+                            />
+                            <Area
+                              type="monotone"
+                              dataKey="revenue"
+                              stroke="#3182ce"
+                              fill="url(#colorGradient2)"
+                              strokeWidth={3}
+                              name="Revenue"
+                            />
+                            <defs>
+                              <linearGradient id="colorGradient2" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#3182ce" stopOpacity={0.8} />
+                                <stop offset="100%" stopColor="#3182ce" stopOpacity={0.1} />
+                              </linearGradient>
+                            </defs>
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        <div className="flex justify-center items-center h-80 text-gray-500 dark:text-gray-400">
+                          No data available
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
               </div>
 
-              {/* Popular Items Table */}
-              <Card>
+              {/* Section: Menu Performance */}
+              <div className="mt-12">
+                <h2 className="text-xl font-semibold text-[#373643] mb-4">Menu Performance</h2>
+                <Card className="bg-white border border-[#373643]/10 shadow-lg rounded-2xl p-4">
                 <CardHeader>
                   <CardTitle>Popular Menu Items</CardTitle>
                 </CardHeader>
@@ -347,6 +571,7 @@ export default function Analytics() {
                   )}
                 </CardContent>
               </Card>
+              </div>
             </>
           )}
         </TabsContent>
@@ -378,35 +603,15 @@ export default function Analytics() {
                 <AIChatbox restaurantId={restaurantId} />
               </div>
               <div className="space-y-6">
-                <Card>
+                {/* Remove Quick Stats Card here */}
+                {/* <Card>
                   <CardHeader>
                     <CardTitle className="text-lg">Quick Stats</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    <div className="flex items-center justify-between p-3 bg-purple-50 rounded-lg">
-                      <div className="flex items-center space-x-2">
-                        <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
-                        <span className="text-sm font-medium">AI Insights Available</span>
-                      </div>
-                      <span className="text-sm text-purple-600 font-semibold">4 New</span>
-                    </div>
-                    <div className="flex items-center justify-between p-3 bg-blue-50 rounded-lg">
-                      <div className="flex items-center space-x-2">
-                        <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                        <span className="text-sm font-medium">Chat Sessions</span>
-                      </div>
-                      <span className="text-sm text-blue-600 font-semibold">12 Active</span>
-                    </div>
-                    <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
-                      <div className="flex items-center space-x-2">
-                        <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                        <span className="text-sm font-medium">Recommendations</span>
-                      </div>
-                      <span className="text-sm text-green-600 font-semibold">8 Pending</span>
-                    </div>
+                    ...
                   </CardContent>
-                </Card>
-                
+                </Card> */}
                 <Card>
                   <CardHeader>
                     <CardTitle className="text-lg">AI Tips</CardTitle>

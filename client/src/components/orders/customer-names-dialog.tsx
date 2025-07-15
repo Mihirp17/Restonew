@@ -186,7 +186,14 @@ export function CustomerNamesDialog({
                 </div>
                 <div>
                   <Label htmlFor="splitType">Billing Type</Label>
-                  <Select value={splitType} onValueChange={(value: any) => setSplitType(value)}>
+                  <Select
+                    value={splitType}
+                    onValueChange={(value) => {
+                      if (value === 'individual' || value === 'combined' || value === 'custom') {
+                        setSplitType(value);
+                      }
+                    }}
+                  >
                     <SelectTrigger className="mt-1">
                       <SelectValue />
                     </SelectTrigger>

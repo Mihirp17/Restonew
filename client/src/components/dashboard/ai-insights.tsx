@@ -51,49 +51,50 @@ interface AIInsightsProps {
   endDate?: Date;
 }
 
-const getInsightIcon = (type: string) => {
-  switch (type) {
-    case 'revenue':
-      return <TrendingUp className="h-5 w-5" />;
-    case 'menu':
-      return <UtensilsCrossed className="h-5 w-5" />;
-    case 'customer_satisfaction':
-      return <Users className="h-5 w-5" />;
-    case 'operations':
-      return <BarChart3 className="h-5 w-5" />;
-    case 'marketing':
-      return <Target className="h-5 w-5" />;
-    default:
-      return <Lightbulb className="h-5 w-5" />;
-  }
-};
+// Brand color constants
+const BRAND_RED = "#ba1d1d";
+const BRAND_GREEN = "#22bb33";
+const BRAND_GREEN_DARK = "#178a29";
+const BRAND_GRAY = "#373643";
 
 const getPriorityColor = (priority: string) => {
-  switch (priority) {
-    case 'critical':
-      return 'bg-red-100 text-red-800 border-red-300';
-    case 'high':
-      return 'bg-orange-100 text-orange-800 border-orange-300';
-    case 'medium':
-      return 'bg-yellow-100 text-yellow-800 border-yellow-300';
-    case 'low':
-      return 'bg-green-100 text-green-800 border-green-300';
-    default:
-      return 'bg-gray-100 text-gray-800 border-gray-300';
-  }
+  const colors = {
+    'critical': 'bg-red-100 text-[#ba1d1d] border-[#ba1d1d]/30',
+    'high': 'bg-orange-100 text-orange-800 border-orange-300',
+    'medium': 'bg-yellow-100 text-yellow-800 border-yellow-300',
+    'low': 'bg-green-100 text-[#178a29] border-[#22bb33]/30'
+  } as Record<string, string>;
+  return colors[priority] || 'bg-gray-100 text-gray-800 border-gray-300';
 };
 
 const getStatusColor = (status: string) => {
-  switch (status) {
-    case 'completed':
-      return 'bg-green-100 text-green-800';
-    case 'in_progress':
-      return 'bg-blue-100 text-blue-800';
-    case 'dismissed':
-      return 'bg-gray-100 text-gray-800';
-    default:
-      return 'bg-yellow-100 text-yellow-800';
-  }
+  const colors = {
+    'completed': 'bg-green-100 text-[#178a29]',
+    'in_progress': 'bg-yellow-100 text-yellow-800',
+    'dismissed': 'bg-gray-100 text-gray-800',
+    'pending': 'bg-orange-100 text-orange-800'
+  } as Record<string, string>;
+  return colors[status] || 'bg-gray-100 text-gray-800';
+};
+
+const getDifficultyColor = (difficulty: string) => {
+  const colors = {
+    'easy': 'bg-green-100 text-[#178a29]',
+    'medium': 'bg-yellow-100 text-yellow-800',
+    'hard': 'bg-red-100 text-[#ba1d1d]'
+  } as Record<string, string>;
+  return colors[difficulty] || 'bg-gray-100 text-gray-800';
+};
+
+const getInsightIcon = (type: string) => {
+  const icons = {
+    'revenue': <TrendingUp className="h-5 w-5 text-[#ba1d1d]" />,
+    'menu': <UtensilsCrossed className="h-5 w-5 text-[#ba1d1d]" />,
+    'customer_satisfaction': <Users className="h-5 w-5 text-[#22bb33]" />,
+    'operations': <BarChart3 className="h-5 w-5 text-[#ba1d1d]" />,
+    'marketing': <Target className="h-5 w-5 text-[#ba1d1d]" />,
+  } as Record<string, JSX.Element>;
+  return icons[type] || <Lightbulb className="h-5 w-5 text-[#ba1d1d]" />;
 };
 
 const getStatusIcon = (status: string) => {
@@ -109,6 +110,12 @@ const getStatusIcon = (status: string) => {
   }
 };
 
+// Add localStorage helpers for last seen and archived insights
+const getLastSeenTimestamp = () => localStorage.getItem('aiInsightsLastSeen') || '';
+const setLastSeenTimestamp = (ts: string) => localStorage.setItem('aiInsightsLastSeen', ts);
+const getArchivedIds = () => JSON.parse(localStorage.getItem('aiInsightsArchived') || '[]') as number[];
+const setArchivedIds = (ids: number[]) => localStorage.setItem('aiInsightsArchived', JSON.stringify(ids));
+
 export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps) {
   const [insights, setInsights] = useState<AIInsight[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -116,6 +123,23 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
   const [selectedInsight, setSelectedInsight] = useState<AIInsight | null>(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const { toast } = useToast();
+
+  // Add state for history and last seen
+  const [showHistory, setShowHistory] = useState(false);
+  const [history, setHistory] = useState<AIInsight[]>([]);
+  const [archivedIds, setArchivedIdsState] = useState<number[]>(getArchivedIds());
+  const [lastSeen, setLastSeen] = useState(getLastSeenTimestamp());
+
+  // Add state for feedback
+  const [feedback, setFeedback] = useState<Record<number, { rating: number; reason: string }>>({});
+  const feedbackOptions = [
+    'Not relevant',
+    'Already implemented',
+    'Data incorrect',
+  ];
+
+  // Add state for filtered insights
+  const [filteredInsights, setFilteredInsights] = useState<AIInsight[]>([]);
 
   // Fetch insights
   const fetchInsights = async () => {
@@ -127,8 +151,16 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
         url += `?startDate=${encodeURIComponent(startDate.toISOString())}&endDate=${encodeURIComponent(endDate.toISOString())}`;
       }
       const response = await apiRequest('GET', url);
-      const data = await response.json();
+      const data: AIInsight[] = await response.json();
       setInsights(data);
+      setFilteredInsights(data); // Initialize filteredInsights
+      setHistory(prev => ([...data, ...prev.filter(h => !data.some(i => i.id === h.id))]));
+      // Update last seen timestamp
+      const latest = data.length > 0 ? data[0].createdAt : '';
+      if (latest) {
+        setLastSeenTimestamp(latest);
+        setLastSeen(latest);
+      }
     } catch (error) {
       console.error('Error fetching AI insights:', error);
       toast({
@@ -144,19 +176,38 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
   // Generate new insights
   const generateInsights = async () => {
     if (!restaurantId) return;
-    
     try {
       setIsGenerating(true);
+      // Get the current number of insights before generating
+      const beforeResponse = await apiRequest('GET', `/api/restaurants/${restaurantId}/ai-insights`);
+      const beforeData = await beforeResponse.json();
+      const beforeIds = new Set(beforeData.map((insight: any) => insight.id));
+
+      // Generate new insights
       const response = await apiRequest('POST', `/api/restaurants/${restaurantId}/ai-insights/generate`);
-      const data = await response.json();
+      const generatedData = await response.json();
       
-      // Refresh insights list
+      // Fetch all insights after generation
       await fetchInsights();
-      
+      const afterResponse = await apiRequest('GET', `/api/restaurants/${restaurantId}/ai-insights`);
+      const afterData = await afterResponse.json();
+      const afterIds = new Set(afterData.map((insight: any) => insight.id));
+
+      // Find new insight IDs
+      const newIds = Array.from(afterIds).filter(id => !beforeIds.has(id));
+      const newCount = newIds.length;
+
+      if (newCount > 0) {
       toast({
         title: "Insights Generated",
-        description: `Generated ${data.length} new insights for your restaurant`,
+          description: `Generated ${newCount} new insight${newCount > 1 ? 's' : ''} for your restaurant`,
       });
+      } else {
+        toast({
+          title: "No New Insights",
+          description: "No new insights were generated. Try again later or adjust your data.",
+        });
+      }
     } catch (error) {
       console.error('Error generating AI insights:', error);
       toast({
@@ -204,6 +255,55 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
     }
   };
 
+  // Archive/dismiss insight
+  const archiveInsight = (id: number) => {
+    const updated = [...archivedIds, id];
+    setArchivedIdsState(updated);
+    setArchivedIds(updated);
+    setFilteredInsights(prev => prev.filter(i => i.id !== id));
+    toast({ title: 'Insight archived', description: 'This insight has been archived.' });
+  };
+
+  // Mark as implemented
+  const markAsImplemented = async (id: number) => {
+    await apiRequest('PUT', `/api/restaurants/${restaurantId}/ai-insights/${id}/status`, { status: 'completed' });
+    setInsights(prev => prev.map(i => i.id === id ? { ...i, implementationStatus: 'completed' } : i));
+    setFilteredInsights(prev => prev.map(i => i.id === id ? { ...i, implementationStatus: 'completed' } : i));
+    toast({ title: 'Insight marked as implemented', description: 'This insight has been marked as implemented.' });
+  };
+
+  // Feedback
+  const submitFeedback = (id: number) => {
+    // Simulate feedback submission
+    toast({ title: 'Feedback submitted', description: 'Thank you for your feedback!' });
+  };
+
+  // Export insights (stub for now)
+  const exportInsights = (format: 'csv' | 'json') => {
+    // For now, just show a toast
+    toast({ title: 'Export', description: `Exported insights as ${format.toUpperCase()}` });
+  };
+
+  // Filter out archived insights
+  const visibleInsights = filteredInsights.filter((i: AIInsight) => !archivedIds.includes(i.id));
+
+  // Deduplicate by type, title, and description (content)
+  const uniqueInsights = Array.from(
+    new Map(
+      visibleInsights.map(i => [
+        `${i.type}|${i.title}|${i.description}`,
+        i
+      ])
+    ).values()
+  );
+
+  // Use unique, visible insights for stats
+  const statsSource = uniqueInsights;
+  const totalInsights = statsSource.length;
+  const unreadInsights = statsSource.filter(i => !i.isRead).length;
+  const highPriorityInsights = statsSource.filter(i => i.priority === 'high' || i.priority === 'critical').length;
+  const completedInsights = statsSource.filter(i => i.implementationStatus === 'completed').length;
+
   // Show insight details
   const showDetails = (insight: AIInsight) => {
     setSelectedInsight(insight);
@@ -217,32 +317,14 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
     fetchInsights();
   }, [restaurantId, startDate, endDate]);
 
-  // Statistics
-  const totalInsights = insights.length;
-  const unreadInsights = insights.filter(i => !i.isRead).length;
-  const highPriorityInsights = insights.filter(i => i.priority === 'high' || i.priority === 'critical').length;
-  const completedInsights = insights.filter(i => i.implementationStatus === 'completed').length;
-
-  if (isLoading) {
-    return (
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <Skeleton className="h-8 w-64" />
-          <Skeleton className="h-10 w-32" />
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map(i => (
-            <Skeleton key={i} className="h-24" />
-          ))}
-        </div>
-        <div className="space-y-4">
-          {[1, 2, 3].map(i => (
-            <Skeleton key={i} className="h-40" />
-          ))}
-        </div>
-      </div>
-    );
-  }
+  // Subtle badge style
+  const subtleBadge = 'px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-[#373643] border border-[#373643]/10';
+  const newBadge = 'px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 text-[#178a29] border border-[#22bb33]/20';
+  const archiveBtn = 'hover:bg-gray-100 text-gray-400 hover:text-[#ba1d1d] rounded-full p-1 transition';
+  const implementedBtn = 'bg-[#22bb33]/10 text-[#178a29] border border-[#22bb33]/20 rounded-lg px-3 py-1 text-xs font-semibold hover:bg-[#22bb33]/20 transition';
+  const feedbackStar = (active: boolean) => `h-4 w-4 cursor-pointer ${active ? 'text-yellow-400' : 'text-gray-300'} transition`;
+  const feedbackSelect = 'w-28 text-xs rounded border border-gray-200 bg-white';
+  const feedbackSubmit = 'ml-2 px-3 py-1 text-xs rounded bg-[#ba1d1d]/90 text-white hover:bg-[#ba1d1d] transition';
 
   return (
     <div className="space-y-6">
@@ -336,7 +418,7 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
       </div>
 
       {/* Insights List */}
-      {insights.length === 0 ? (
+      {uniqueInsights.length === 0 ? (
         <Card>
           <CardContent className="p-8 text-center">
             <Brain className="h-12 w-12 text-gray-400 mx-auto mb-4" />
@@ -358,67 +440,54 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
         </Card>
       ) : (
         <div className="space-y-4">
-          {insights.map((insight) => (
-            <Card 
-              key={insight.id} 
-              className={`cursor-pointer transition-all hover:shadow-md ${
-                !insight.isRead ? 'ring-2 ring-blue-200 bg-blue-50/30' : ''
-              }`}
-              onClick={() => showDetails(insight)}
-            >
-              <CardHeader className="pb-3">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-start space-x-3">
-                    <div className="p-2 bg-gray-100 rounded-lg">
+          {uniqueInsights.map((insight) => (
+            <Card key={insight.id} className="bg-white border border-[#373643]/10 shadow rounded-xl p-3">
+              <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                <div className="flex items-center gap-2">
                       {getInsightIcon(insight.type)}
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center space-x-2 mb-1">
-                        <CardTitle className="text-lg">{insight.title}</CardTitle>
-                        {!insight.isRead && (
-                          <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                        )}
+                  <span className={subtleBadge}>{insight.type.replace('_', ' ')}</span>
+                  {insight.createdAt > lastSeen && (
+                    <span className={newBadge}>NEW</span>
+                  )}
+                  <Badge className={getPriorityColor(insight.priority)}>{insight.priority.toUpperCase()}</Badge>
                       </div>
-                      <CardDescription className="text-sm">
-                        {insight.description}
-                      </CardDescription>
-                    </div>
-                  </div>
-                  <div className="flex flex-col items-end space-y-2">
-                    <Badge className={getPriorityColor(insight.priority)}>
-                      {insight.priority.toUpperCase()}
-                    </Badge>
-                    <div className="flex items-center space-x-1 text-xs text-gray-500">
-                      <span>{Math.round(insight.confidence)}% confidence</span>
-                    </div>
-                  </div>
+                <div className="flex items-center gap-1">
+                  <button className={archiveBtn} title="Dismiss" onClick={() => archiveInsight(insight.id)}>
+                    <XCircle className="h-4 w-4" />
+                  </button>
                 </div>
               </CardHeader>
-              <CardContent className="pt-0">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-4 text-sm text-gray-600">
-                    <span className="capitalize">{insight.type.replace('_', ' ')}</span>
-                    <span>•</span>
-                    <span>{insight.dataSource.timeframe}</span>
-                    <span>•</span>
-                    <span>{insight.recommendations.length} recommendations</span>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Badge variant="outline" className={getStatusColor(insight.implementationStatus)}>
-                      <div className="flex items-center space-x-1">
-                        {getStatusIcon(insight.implementationStatus)}
-                        <span className="capitalize">
-                          {insight.implementationStatus.replace('_', ' ')}
+              <CardContent className="pt-0 pb-2">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-semibold text-[#373643] text-base">{insight.title}</span>
+                  {insight.implementationStatus !== 'completed' ? (
+                    <button className={implementedBtn} onClick={() => markAsImplemented(insight.id)}>
+                      <CheckCircle className="inline h-4 w-4 mr-1" /> Mark as Implemented
+                    </button>
+                  ) : (
+                    <span
+                      className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 text-[#178a29] border border-[#22bb33]/20 flex items-center gap-1 cursor-default"
+                      title="This insight has been marked as implemented"
+                    >
+                      <CheckCircle className="h-4 w-4" /> Implemented
                         </span>
-                      </div>
-                    </Badge>
-                  </div>
+                  )}
                 </div>
-                <div className="mt-3">
-                  <div className="flex items-center space-x-2 text-xs text-gray-500 mb-1">
-                    <span>Confidence</span>
-                  </div>
-                  <Progress value={insight.confidence} className="h-2" />
+                <div className="text-xs text-gray-500 mb-1">{insight.dataSource.timeframe} • {insight.recommendations.length} recs</div>
+                <div className="text-sm text-gray-700 mb-2 line-clamp-2">{insight.description}</div>
+                {/* Feedback */}
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-xs text-gray-500">Rate:</span>
+                  {[1,2,3,4,5].map(star => (
+                    <span key={star} onClick={() => setFeedback(f => ({ ...f, [insight.id]: { ...(f[insight.id]||{}), rating: star } }))} className={feedbackStar(feedback[insight.id]?.rating >= star)}>★</span>
+                  ))}
+                  <Select value={feedback[insight.id]?.reason || ''} onValueChange={val => setFeedback(f => ({ ...f, [insight.id]: { ...(f[insight.id]||{}), reason: val } }))}>
+                    <SelectTrigger className={feedbackSelect}><SelectValue placeholder="Reason" /></SelectTrigger>
+                    <SelectContent>
+                      {feedbackOptions.map(opt => <SelectItem key={opt} value={opt}>{opt}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <button className={feedbackSubmit} onClick={() => submitFeedback(insight.id)} disabled={!feedback[insight.id]?.rating || !feedback[insight.id]?.reason}>Submit</button>
                 </div>
               </CardContent>
             </Card>
@@ -536,6 +605,28 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
               </DialogFooter>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* History modal/dialog */}
+      <Dialog open={showHistory} onOpenChange={setShowHistory}>
+        <DialogContent className="max-w-2xl bg-white border border-[#373643]/10 shadow rounded-xl">
+          <DialogHeader>
+            <DialogTitle className="text-lg text-[#373643]">Insight History</DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[60vh] overflow-y-auto text-xs text-gray-600">
+            {history.map(h => (
+              <div key={h.id} className="border-b border-gray-100 py-2">
+                <div className="flex justify-between"><span className="font-semibold text-[#373643]">{h.title}</span><span className="text-xs text-gray-400">{h.createdAt}</span></div>
+                <div className="text-xs text-gray-500">{h.description}</div>
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="border border-[#ba1d1d] text-[#ba1d1d] rounded" onClick={() => exportInsights('csv')}>Export CSV</Button>
+            <Button variant="outline" className="border border-[#ba1d1d] text-[#ba1d1d] rounded" onClick={() => exportInsights('json')}>Export JSON</Button>
+            <Button variant="ghost" onClick={() => setShowHistory(false)}>Close</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

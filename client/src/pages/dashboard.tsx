@@ -4,7 +4,6 @@ import { StatsCard } from "@/components/dashboard/stats-card";
 import { LiveOrders } from "@/components/dashboard/live-orders";
 import { TablesOverview } from "@/components/dashboard/tables-overview";
 import { PopularItems } from "@/components/dashboard/popular-items";
-import { NewAIInsights } from "@/components/dashboard/new-ai-insights-fixed";
 import { StaffOrderDialog } from "@/components/menu/staff-order-dialog";
 import { CustomerNamesDialog } from "@/components/orders/customer-names-dialog";
 import { useAuth } from "@/hooks/use-auth";
@@ -377,12 +376,9 @@ export default function Dashboard() {
 
         {/* Tables Overview and Menu Items */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <TablesOverview restaurantId={restaurantId} />
-          <PopularItems restaurantId={restaurantId} />
+          <TablesOverview restaurantId={restaurantId} waiterRequests={waiterRequests} />
+          <PopularItems restaurantId={restaurantId} dateRange={dateRange} />
         </div>
-
-        {/* AI Insights Section */}
-        <NewAIInsights restaurantId={restaurantId} />
       </div>
 
       {/* Waiter Request Details Dialog */}

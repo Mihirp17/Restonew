@@ -1,171 +1,289 @@
-// Socket.io client implementation
-export interface SocketMessage {
-  type: string;
-  payload: Record<string, unknown>;
-}
+import { debounce } from './utils';
 
 let socket: WebSocket | null = null;
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let socketUrl = '';
+let isConnecting = false;
+let reconnectTimer: NodeJS.Timeout | null = null;
 let reconnectAttempts = 0;
-const maxReconnectAttempts = 5;
-const listeners: { [key: string]: Function[] } = {};
+let eventListeners: Map<string, Set<Function>> = new Map();
+let messageQueue: any[] = [];
 
-export const connectWebSocket = (restaurantId?: number, tableId?: number) => {
-  if (socket) {
-    socket.close();
-  }
+// Constants for better configuration
+const MAX_RECONNECT_ATTEMPTS = 5;
+const RECONNECT_DELAY_MS = 3000;
+const MAX_RECONNECT_DELAY_MS = 30000;
+const HEARTBEAT_INTERVAL_MS = 30000;
+let heartbeatInterval: NodeJS.Timeout | null = null;
+const MESSAGE_BATCH_DELAY = 50;  // Delay in ms for batching messages
 
-  // Construct WebSocket URL properly
-  let wsUrl: string;
-  
-  if (import.meta.env.DEV) {
-    // Development mode - connect to backend server
-    wsUrl = 'ws://localhost:3000/ws';
-  } else {
-    // Production mode - use current host
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    wsUrl = `${protocol}//${window.location.host}/ws`;
+/**
+ * Connect to WebSocket server with restaurant ID
+ */
+export function connectWebSocket(restaurantId: number, tableId?: number) {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    console.log('WebSocket already connected');
+    return;
   }
   
-  console.log('[WebSocket] Connecting to:', wsUrl);
+  if (isConnecting) {
+    console.log('WebSocket connection already in progress');
+    return;
+  }
+  
+  isConnecting = true;
   
   try {
-    socket = new WebSocket(wsUrl);
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host;
+    const params = new URLSearchParams();
+    
+    if (restaurantId) {
+      params.append('restaurantId', restaurantId.toString());
+    }
+    
+    if (tableId) {
+      params.append('tableId', tableId.toString());
+    }
+    
+    socketUrl = `${protocol}//${host}/ws?${params.toString()}`;
+  
+    socket = new WebSocket(socketUrl);
 
     socket.onopen = () => {
-      console.log('[WebSocket] Connected successfully');
-      reconnectAttempts = 0; // Reset reconnect attempts on successful connection
+      console.log('WebSocket connected');
+      isConnecting = false;
+      reconnectAttempts = 0;
       
-      // Register based on context
-      if (restaurantId) {
-        console.log(`[WebSocket] Registering for restaurant: ${restaurantId}`);
-        sendMessage({
-          type: 'register-restaurant',
-          payload: { restaurantId }
+      // Send any queued messages
+      if (messageQueue.length > 0) {
+        messageQueue.forEach(msg => {
+          if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify(msg));
+          }
         });
-        
-        if (tableId) {
-          console.log(`[WebSocket] Registering for table: ${tableId}`);
-          sendMessage({
-            type: 'register-table',
-            payload: { restaurantId, tableId }
-          });
-        }
+        messageQueue = [];
       }
+      
+      // Setup heartbeat
+      startHeartbeat();
     };
 
     socket.onmessage = (event) => {
       try {
-        const message: SocketMessage = JSON.parse(event.data);
-        console.log('[WebSocket] Message received:', message.type);
+        const data = JSON.parse(event.data);
         
-        // Trigger event listeners for this message type
-        if (listeners[message.type]) {
-          listeners[message.type].forEach(callback => {
+        // Handle heartbeat
+        if (data.type === 'pong') {
+          return;
+        }
+        
+        // Handle message
+        const listeners = eventListeners.get(data.type);
+        if (listeners) {
+          listeners.forEach(callback => {
             try {
-              callback(message.payload);
+              callback(data.payload);
             } catch (error) {
-              console.error('[WebSocket] Error in message handler:', error);
+              console.error(`Error in WebSocket ${data.type} event listener:`, error);
             }
           });
         }
       } catch (error) {
-        console.error('[WebSocket] Error parsing message:', error);
+        console.error('Error parsing WebSocket message:', error);
       }
     };
 
     socket.onclose = (event) => {
-      console.log(`[WebSocket] Disconnected. Code: ${event.code}, Reason: ${event.reason || 'No reason provided'}`);
-      console.log(`[WebSocket] wasClean: ${event.wasClean}`);
+      console.log(`WebSocket closed with code: ${event.code}, reason: ${event.reason}`);
+      socket = null;
+      isConnecting = false;
       
-      // Clean up any existing reconnect timer
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
       }
       
-      // Only reconnect if we haven't exceeded max attempts and the connection wasn't closed intentionally
-      if (reconnectAttempts < maxReconnectAttempts && event.code !== 1000) {
-        reconnectAttempts++;
-        console.log(`[WebSocket] Attempting to reconnect... (${reconnectAttempts}/${maxReconnectAttempts})`);
-        
-        // Exponential backoff for reconnection
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000);
-        console.log(`[WebSocket] Will reconnect in ${delay}ms`);
-        reconnectTimer = setTimeout(() => {
-          connectWebSocket(restaurantId, tableId);
-        }, delay);
-      } else if (reconnectAttempts >= maxReconnectAttempts) {
-        console.error('[WebSocket] Max reconnection attempts reached. Please refresh the page.');
+      // Only attempt to reconnect if not closed cleanly
+      if (event.code !== 1000) {
+        scheduleReconnect();
       }
     };
 
     socket.onerror = (error) => {
-      console.error('[WebSocket] Error:', error);
-      // The onclose handler will be called after this
+      console.error('WebSocket error:', error);
+      isConnecting = false;
     };
+    
   } catch (error) {
-    console.error('[WebSocket] Failed to create connection:', error);
-    // Reset socket reference on connection failure
-    socket = null;
+    console.error('Error connecting to WebSocket:', error);
+    isConnecting = false;
+    scheduleReconnect();
   }
-};
+}
 
-export const sendMessage = (message: SocketMessage) => {
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    try {
-      const messageStr = JSON.stringify(message);
-      console.log(`[WebSocket] Sending message of type: ${message.type}`);
-      socket.send(messageStr);
-      return true;
-    } catch (error) {
-      console.error('[WebSocket] Error sending message:', error);
-      return false;
-    }
-  } else {
-    console.warn(`[WebSocket] Cannot send message, socket not open. ReadyState: ${socket?.readyState}`);
-    return false;
-  }
-};
-
-export const addEventListener = (event: string, callback: Function) => {
-  if (!listeners[event]) {
-    listeners[event] = [];
-  }
-  listeners[event].push(callback);
-};
-
-export const removeEventListener = (event: string, callback: Function) => {
-  if (listeners[event]) {
-    listeners[event] = listeners[event].filter(cb => cb !== callback);
-  }
-};
-
-export const disconnectWebSocket = () => {
-  if (socket) {
-    console.log('[WebSocket] Manually disconnecting');
-    socket.close(1000, 'Client disconnected');
-    socket = null;
+/**
+ * Schedule a reconnection attempt with exponential backoff
+ */
+function scheduleReconnect() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
   }
   
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+    console.log(`Exceeded maximum reconnection attempts (${MAX_RECONNECT_ATTEMPTS})`);
+    return;
+  }
+  
+  const delay = Math.min(
+    RECONNECT_DELAY_MS * Math.pow(1.5, reconnectAttempts),
+    MAX_RECONNECT_DELAY_MS
+  );
+  
+  console.log(`Scheduling reconnection attempt ${reconnectAttempts + 1} in ${delay}ms`);
+  
+  reconnectTimer = setTimeout(() => {
+    reconnectAttempts++;
+    reconnectWebSocket();
+  }, delay);
+}
+
+/**
+ * Start heartbeat to keep connection alive
+ */
+function startHeartbeat() {
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+  }
+  
+  heartbeatInterval = setInterval(() => {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'ping', payload: {} }));
+    } else {
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+      }
+    }
+  }, HEARTBEAT_INTERVAL_MS);
+}
+
+/**
+ * Attempt to reconnect to the WebSocket server
+ */
+export function reconnectWebSocket(restaurantId?: number, tableId?: number) {
+  if (!socketUrl && !restaurantId) {
+    console.log('No previous connection to reconnect to');
+    return;
+  }
+  
+  console.log(`Attempting to reconnect to WebSocket (attempt ${reconnectAttempts})`);
+  
+  if (restaurantId) {
+    connectWebSocket(restaurantId, tableId);
+  } else {
+    connectWebSocket(parseInt(new URLSearchParams(socketUrl.split('?')[1]).get('restaurantId') || '0'));
+  }
+}
+
+/**
+ * Disconnect from the WebSocket server
+ */
+export function disconnectWebSocket() {
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
   
-  // Clear all listeners
-  Object.keys(listeners).forEach(key => {
-    listeners[key] = [];
-  });
-};
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
+  
+  if (socket) {
+    console.log('Disconnecting WebSocket');
+    socket.close(1000, 'User disconnected');
+    socket = null;
+  }
+}
 
-export const isConnected = () => {
-  return !!(socket && socket.readyState === WebSocket.OPEN);
-};
+/**
+ * Check if the WebSocket is connected
+ */
+export function isConnected(): boolean {
+  return !!socket && socket.readyState === WebSocket.OPEN;
+}
 
-export const reconnectWebSocket = (restaurantId?: number, tableId?: number) => {
-  console.log('[WebSocket] Manual reconnection requested');
-  disconnectWebSocket();
-  // Reset reconnect attempts for manual reconnection
-  reconnectAttempts = 0;
-  connectWebSocket(restaurantId, tableId);
-};
+/**
+ * Add event listener for a WebSocket event type
+ * Returns a cleanup function to remove the listener
+ */
+export function addEventListener(eventType: string, callback: Function): () => void {
+  if (!eventListeners.has(eventType)) {
+    eventListeners.set(eventType, new Set());
+  }
+  
+  const listeners = eventListeners.get(eventType)!;
+  listeners.add(callback);
+  
+  // Return cleanup function
+  return () => removeEventListener(eventType, callback);
+}
+
+/**
+ * Remove event listener for a WebSocket event type
+ */
+export function removeEventListener(eventType: string, callback: Function): void {
+  const listeners = eventListeners.get(eventType);
+  if (listeners) {
+    listeners.delete(callback);
+    if (listeners.size === 0) {
+      eventListeners.delete(eventType);
+    }
+  }
+}
+
+// Batch message sending for efficiency
+const debouncedSendMessages = debounce(() => {
+  if (messageQueue.length === 0 || !socket || socket.readyState !== WebSocket.OPEN) return;
+  
+  // If there's only one message, send it directly
+  if (messageQueue.length === 1) {
+    socket.send(JSON.stringify(messageQueue[0]));
+  }
+  // If there are multiple messages of the same type, batch them
+  else {
+    const messagesByType = messageQueue.reduce((acc, msg) => {
+      if (!acc[msg.type]) acc[msg.type] = [];
+      acc[msg.type].push(msg.payload);
+      return acc;
+    }, {} as Record<string, any[]>);
+    
+    // Send batched messages by type
+    Object.entries(messagesByType).forEach(([type, payloads]) => {
+      socket!.send(JSON.stringify({
+        type: `batch_${type}`,
+        payload: { items: payloads }
+      }));
+    });
+  }
+  
+  messageQueue = [];
+}, MESSAGE_BATCH_DELAY);
+
+/**
+ * Send a message to the WebSocket server
+ * Messages are batched for efficiency
+ */
+export function sendMessage(message: any): void {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    messageQueue.push(message);
+    
+    if (!isConnected() && !isConnecting && socketUrl) {
+      reconnectWebSocket();
+    }
+    return;
+  }
+  
+  messageQueue.push(message);
+  debouncedSendMessages();
+}

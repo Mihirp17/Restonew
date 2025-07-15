@@ -14,12 +14,20 @@ interface LiveOrdersProps {
 interface OrderType {
   id: number;
   orderNumber?: string;
+  displayOrderNumber?: number;
   status: 'pending' | 'confirmed' | 'preparing' | 'served' | 'completed' | 'cancelled';
   total: string;
   createdAt: string | Date;
   customerName?: string;
   tableNumber?: number;
   groupId?: number;
+  items?: Array<{
+    id: number;
+    quantity: number;
+    price: string;
+    menuItemId: number;
+    menuItemName: string;
+  }>;
 }
 
 // Memoized order card component to prevent unnecessary re-renders
@@ -77,13 +85,29 @@ const OrderCard = memo(({
       <div className="p-4">
         <div className="flex justify-between mb-3">
           <div>
-            <h3 className="text-sm font-medium text-gray-900 dark:text-white">Order #{order.orderNumber || order.id}</h3>
+            <h3 className="text-sm font-medium text-gray-900 dark:text-white">
+              Order #{order.displayOrderNumber || order.orderNumber || order.id}
+            </h3>
             <p className="text-xs text-gray-500 dark:text-gray-400">{timeAgo}</p>
           </div>
           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusColors.bgClass} ${statusColors.textClass} ${statusColors.darkBgClass} ${statusColors.darkTextClass}`}>
             {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
           </span>
         </div>
+        {/* Show ordered items */}
+        {order.items && order.items.length > 0 && (
+          <div className="mb-3">
+            <div className="text-xs font-semibold text-gray-700 dark:text-gray-200 mb-1">Items:</div>
+            <ul className="text-xs text-gray-900 dark:text-white space-y-1">
+              {order.items.map(item => (
+                <li key={item.id} className="flex justify-between">
+                  <span>{item.menuItemName}</span>
+                  <span>x{item.quantity}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         
         <div className="mb-3">
           {order.customerName && (
@@ -129,28 +153,28 @@ const OrderCard = memo(({
 OrderCard.displayName = 'OrderCard';
 
 export const LiveOrders = memo(({ restaurantId }: LiveOrdersProps) => {
-  const { activeOrders, updateOrderStatus, isLoading } = useOrders(restaurantId || 0, { 
+  const ordersResult = useOrders(restaurantId || 0, { 
     lightweight: true, 
     limit: 10 
-  }) as { activeOrders: OrderType[]; updateOrderStatus: (args: { orderId: number; status: OrderType['status'] }) => Promise<void>; isLoading: boolean };
+  });
+  
+  // Extract and transform data with proper typing
+  const activeOrders = ordersResult.activeOrders as unknown as OrderType[];
+  
+  const { isLoading } = ordersResult;
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { t } = useLang();
 
-  // Memoize order count calculation
-  const orderCount = useMemo(() => activeOrders?.length || 0, [activeOrders?.length]);
-
-  // Handle order status update
-  const handleUpdateStatus = useCallback(async (
-    orderId: number,
-    status: OrderType['status']
-  ) => {
+  // Create a properly typed wrapper for updateOrderStatus
+  const updateOrderStatus = async ({ orderId, status }: { orderId: number; status: OrderType['status'] }) => {
+    return ordersResult.updateOrderStatus({ orderId, status });
+  };
+  
+  // Create a handler that matches the OrderCard component's expected signature
+  const handleUpdateStatus = useCallback(async (orderId: number, status: string) => {
     try {
-      await updateOrderStatus({ orderId, status });
-      
-      // NOTE: Removed automatic table status update on order completion
-      // Tables should only be marked as vacant when all bills are paid,
-      // which is handled by the billing system automatically
+      await ordersResult.updateOrderStatus({ orderId, status: status as OrderType['status'] });
       
       toast({
         title: t("success", "Success"),
@@ -165,7 +189,10 @@ export const LiveOrders = memo(({ restaurantId }: LiveOrdersProps) => {
         variant: "destructive",
       });
     }
-  }, [updateOrderStatus, toast, t]);
+  }, [ordersResult, toast, t]);
+
+  // Memoize order count calculation
+  const orderCount = useMemo(() => activeOrders?.length || 0, [activeOrders?.length]);
 
   if (isLoading) {
     return (

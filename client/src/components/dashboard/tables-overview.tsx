@@ -8,21 +8,38 @@ import { useLang } from "@/contexts/language-context";
 
 interface TablesOverviewProps {
   restaurantId?: number;
+  waiterRequests?: any[];
 }
 
 // Memoized table component to prevent unnecessary re-renders
 const TableCard = memo(({ 
   table, 
   onToggleOccupied, 
-  t 
+  t, 
+  waiterRequests = []
 }: { 
-  table: TableType & { groupId?: number; createdAt?: string | Date; updatedAt?: string | Date };
+  table: { 
+    id: number;
+    number: number;
+    capacity: number;
+    isOccupied: boolean;
+    qrCode: string;
+    restaurantId: number;
+    groupId?: number | null;
+    createdAt?: string | Date;
+    updatedAt?: string | Date;
+  };
   onToggleOccupied: (tableId: number, isOccupied: boolean) => void; 
   t: any;
+  waiterRequests?: any[];
 }) => {
   const handleClick = useCallback(() => {
     onToggleOccupied(table.id, table.isOccupied);
   }, [table.id, table.isOccupied, onToggleOccupied]);
+
+  const hasBillRequest = waiterRequests.some(
+    (req) => req.tableId === table.id && req.requestType === 'bill-payment'
+  );
 
   const { cardClassName, textClassName, statusText } = useMemo(() => ({
     cardClassName: `rounded-lg p-3 text-center cursor-pointer transition-colors duration-200 ${
@@ -39,9 +56,23 @@ const TableCard = memo(({
   }), [table.isOccupied, t]);
 
   return (
-    <div className={cardClassName} onClick={handleClick}>
+    <div className={cardClassName} onClick={handleClick} style={{ position: 'relative' }}>
       <p className={textClassName}>
         Table {table.number}
+        {hasBillRequest && (
+          <span style={{
+            background: '#ba1d1d',
+            color: 'white',
+            borderRadius: '8px',
+            fontSize: '0.7em',
+            padding: '2px 6px',
+            marginLeft: '8px',
+            verticalAlign: 'middle',
+            fontWeight: 600
+          }}>
+            Bill Requested
+          </span>
+        )}
       </p>
       <p className="text-xs text-gray-600 dark:text-gray-400">
         {statusText}
@@ -54,7 +85,7 @@ TableCard.displayName = 'TableCard';
 
 export const TablesOverview = memo(function TablesOverview({ restaurantId }: TablesOverviewProps) {
   const queryClient = useQueryClient();
-  const { tables = [], isLoading, updateTable } = useTables(restaurantId || 0) as { tables: (TableType & { groupId?: number; createdAt?: string | Date; updatedAt?: string | Date })[]; isLoading: boolean; updateTable: (args: { tableId: number; data: Partial<TableType> }) => Promise<void> };
+  const { tables = [], isLoading, updateTable } = useTables(restaurantId || 0);
   const { t } = useLang();
 
   // Toggle table occupancy status
@@ -120,6 +151,7 @@ export const TablesOverview = memo(function TablesOverview({ restaurantId }: Tab
               table={table} 
               onToggleOccupied={handleToggleOccupied} 
               t={t} 
+              waiterRequests={waiterRequests}
             />
           ))
         ) : (

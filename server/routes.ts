@@ -5,8 +5,23 @@ import session from 'express-session';
 import { sessionConfig, authenticate, authorize, authorizeRestaurant, loginPlatformAdmin, loginRestaurant, loginUser } from "./auth";
 import { setupWebSocketServer } from "./socket";
 import { z } from "zod";
-import { insertRestaurantSchema, insertUserSchema, insertMenuItemSchema, insertTableSchema, insertOrderSchema, insertOrderItemSchema, insertFeedbackSchema } from "@shared/schema";
-// Stripe functionality removed - import { stripe, createOrUpdateCustomer, createSubscription, updateSubscription, cancelSubscription, generateClientSecret, handleWebhookEvent, PLANS } from "./stripe";
+import { 
+  insertRestaurantSchema, 
+  insertUserSchema, 
+  insertMenuItemSchema, 
+  insertTableSchema, 
+  insertOrderSchema, 
+  insertOrderItemSchema, 
+  insertFeedbackSchema, 
+  insertApplicationFeedbackSchema 
+} from "@shared/schema";
+import { 
+  billSchema, 
+  updateBillSchema,
+  loginSchema as sharedLoginSchema, 
+  dateRangeSchema as sharedDateRangeSchema,
+  validateData
+} from "@shared/validations";
 import QRCode from 'qrcode';
 import { generateRestaurantInsights, handleRestaurantChat, generateAnalyticsInsights } from './ai';
 import { OrderItem, Order } from "@shared/schema";
@@ -40,7 +55,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   console.log("Setting up authentication routes...");
   app.post('/api/auth/login', async (req, res) => {
     try {
-      const validation = loginSchema.safeParse(req.body);
+      const validation = sharedLoginSchema.safeParse(req.body);
       if (!validation.success) {
         return res.status(400).json({ errors: validation.error.errors });
       }
@@ -341,6 +356,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Public update table session endpoint (for status changes)
+  app.put('/api/public/restaurants/:restaurantId/table-sessions/:sessionId', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const sessionId = parseInt(req.params.sessionId);
+      
+      if (isNaN(restaurantId) || isNaN(sessionId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or session ID' });
+      }
+
+      // Verify the session belongs to this restaurant
+      const existingSession = await storage.getTableSession(sessionId);
+      if (!existingSession || existingSession.restaurantId !== restaurantId) {
+        return res.status(404).json({ message: 'Table session not found' });
+      }
+
+      // Only allow certain status updates for public endpoint
+      const allowedUpdates = ['status'];
+      const updates = Object.keys(req.body).reduce((acc: Record<string, unknown>, key) => {
+        if (allowedUpdates.includes(key)) {
+          acc[key] = req.body[key];
+        }
+        return acc;
+      }, {});
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ message: 'No valid updates provided' });
+      }
+
+      const updatedSession = await storage.updateTableSession(sessionId, updates);
+      return res.json(updatedSession);
+    } catch (error) {
+      console.error('Error updating table session:', error);
+      return res.status(500).json({ message: 'Failed to update table session' });
+    }
+  });
+
   // Customer Routes
   app.post('/api/restaurants/:restaurantId/customers', authenticate, authorizeRestaurant, async (req, res) => {
     try {
@@ -368,9 +420,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const bills = await storage.getBillsByTableSessionId(sessionId);
+      
       return res.json(bills);
     } catch (error) {
-      console.error('Error fetching bills:', error);
+      console.error('Error fetching session bills:', error);
       return res.status(500).json({ message: 'Failed to fetch bills' });
     }
   });
@@ -395,24 +448,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put('/api/restaurants/:restaurantId/bills/:billId', authenticate, authorizeRestaurant, async (req, res) => {
+  app.put('/api/restaurants/:restaurantId/bills/:billId', authenticate, authorizeRestaurant, async (req, res, next) => {
     try {
       const restaurantId = parseInt(req.params.restaurantId);
       const billId = parseInt(req.params.billId);
       
       if (isNaN(restaurantId) || isNaN(billId)) {
-        return res.status(400).json({ message: 'Invalid ID' });
+        return res.status(400).json({ message: 'Invalid restaurant ID or bill ID' });
       }
 
-      const updatedBill = await storage.updateBill(billId, req.body);
+      // Validate with shared schema
+      const validation = validateData(updateBillSchema, req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: 'Invalid bill data', 
+          errors: validation.errors 
+        });
+      }
+
+      // Check if bill belongs to restaurant
+      const bill = await storage.getBill(billId);
+      if (!bill) {
+        return res.status(404).json({ message: 'Bill not found' });
+      }
+      
+      const session = await storage.getTableSession(bill.tableSessionId);
+      if (!session || session.restaurantId !== restaurantId) {
+        return res.status(403).json({ message: 'Bill does not belong to this restaurant' });
+      }
+
+      // Ensure validation.data is not undefined
+      if (!validation.data) {
+        return res.status(400).json({ message: 'Invalid bill data' });
+      }
+
+      const updatedBill = await storage.updateBill(billId, validation.data);
       if (!updatedBill) {
         return res.status(404).json({ message: 'Bill not found' });
       }
 
       return res.json(updatedBill);
     } catch (error) {
-      console.error('Error updating bill:', error);
-      return res.status(500).json({ message: 'Failed to update bill' });
+      next(error);
     }
   });
   console.log("Table session and bill routes set up successfully");
@@ -445,6 +523,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const menuItems = await storage.getMenuItems(restaurantId);
       return res.json(menuItems);
+    } catch (error) {
+      console.error('Error fetching menu items:', error);
+      return res.status(500).json({ message: 'Failed to fetch menu items' });
+    }
+  });
+
+  // Public menu endpoint with categories for customer menu
+  app.get('/api/public/restaurants/:restaurantId/menu-items', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      // Get menu items and group them by category
+      const menuItems = await storage.getMenuItems(restaurantId);
+      
+      // Group items by category (assuming category is a string field)
+      const categoryMap = new Map<string, any[]>();
+      menuItems.forEach(item => {
+        const category = item.category || 'Uncategorized';
+        if (!categoryMap.has(category)) {
+          categoryMap.set(category, []);
+        }
+        categoryMap.get(category)!.push(item);
+      });
+
+      // Convert to array format with category objects
+      const categories = Array.from(categoryMap.entries()).map(([name, items], index) => ({
+        id: index + 1,
+        name,
+        items
+      }));
+
+      return res.json({
+        categories,
+        allItems: menuItems
+      });
     } catch (error) {
       console.error('Error fetching menu items:', error);
       return res.status(500).json({ message: 'Failed to fetch menu items' });
@@ -514,24 +630,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: 'Invalid restaurant ID' });
       }
 
-      const { tableId, partySize, status } = req.body;
-      
+      let { tableId, partySize, status, tableNumber } = req.body;
+
+      // If tableId is not provided but tableNumber is, resolve tableId
+      if ((!tableId || isNaN(parseInt(tableId))) && tableNumber !== undefined) {
+        // Find the table by restaurantId and number
+        const tables = await storage.getTablesByRestaurantId(restaurantId);
+        const foundTable = tables.find(t => t.number === Number(tableNumber));
+        if (!foundTable) {
+          return res.status(404).json({ message: 'Table with given number not found' });
+        }
+        tableId = foundTable.id;
+      }
+
       if (!tableId || isNaN(parseInt(tableId))) {
         return res.status(400).json({ message: 'Valid table ID is required' });
+      }
+      tableId = parseInt(tableId);
+
+      // Validate restaurant exists
+      const restaurant = await storage.getRestaurant(restaurantId);
+      if (!restaurant) {
+        return res.status(404).json({ message: 'Restaurant not found' });
+      }
+
+      // Validate table exists and belongs to restaurant
+      const table = await storage.getTable(tableId);
+      if (!table || table.restaurantId !== restaurantId) {
+        return res.status(404).json({ message: 'Table not found' });
       }
 
       const session = await storage.createTableSession({
         restaurantId,
-        tableId: parseInt(tableId),
+        tableId,
         partySize: partySize || 1,
-        status: status || 'active',
-        sessionName: null,
+        status: status || 'waiting',
+        sessionName: `Table ${table.number}`,
         splitType: 'individual'
       });
 
       return res.status(201).json(session);
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error creating table session:', error);
+      // Handle specific error types
+      if (error instanceof Error && error.message?.includes('already has an active session')) {
+        return res.status(409).json({ message: error.message });
+      }
       return res.status(500).json({ message: 'Failed to create table session' });
     }
   });
@@ -554,6 +698,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: 'Valid table session ID is required' });
       }
 
+      // Validate session exists and belongs to restaurant
+      const session = await storage.getTableSession(parseInt(tableSessionId));
+      if (!session || session.restaurantId !== restaurantId) {
+        return res.status(404).json({ message: 'Table session not found' });
+      }
+
       const customer = await storage.createCustomer({
         tableSessionId: parseInt(tableSessionId),
         name: name.trim(),
@@ -562,9 +712,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isMainCustomer: isMainCustomer || false
       });
 
+              // If this is the main customer, we could update the session in the future
+        // For now, we'll just create the customer without updating the session
+        if (isMainCustomer) {
+          // TODO: Add mainCustomerId field to tableSessions schema if needed
+          console.log(`Main customer ${customer.id} created for session ${tableSessionId}`);
+        }
+
       return res.status(201).json(customer);
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error creating customer:', error);
+      
+      // Handle specific error types
+      if (error instanceof Error && error.message?.includes('not found')) {
+        return res.status(404).json({ message: error.message });
+      }
+      if (error instanceof Error && error.message?.includes('Cannot add customer to session')) {
+        return res.status(400).json({ message: error.message });
+      }
+      
       return res.status(500).json({ message: 'Failed to create customer' });
     }
   });
@@ -584,6 +750,312 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Error fetching customers:', error);
       return res.status(500).json({ message: 'Failed to fetch customers' });
+    }
+  });
+
+  // Public create order endpoint for customers
+  app.post('/api/public/restaurants/:restaurantId/orders', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      let { customerId, tableSessionId, items, notes, tableId, tableNumber } = req.body;
+
+      // If tableId is not provided but tableNumber is, resolve tableId
+      if ((!tableId || isNaN(parseInt(tableId))) && tableNumber !== undefined) {
+        // Find the table by restaurantId and number
+        const tables = await storage.getTablesByRestaurantId(restaurantId);
+        const foundTable = tables.find(t => t.number === Number(tableNumber));
+        if (!foundTable) {
+          return res.status(404).json({ message: 'Table with given number not found' });
+        }
+        tableId = foundTable.id;
+      }
+
+      if (!customerId || !tableSessionId || !items || !Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ 
+          message: 'Customer ID, table session ID, and items are required' 
+        });
+      }
+
+      // Validate items structure
+      for (const item of items) {
+        if (!item.menuItemId || !item.quantity || item.quantity <= 0 || !item.price || item.price <= 0) {
+          return res.status(400).json({ 
+            message: 'Each item must have valid menuItemId, quantity > 0, and price > 0' 
+          });
+        }
+      }
+
+      // Get the table session to get the table ID
+      const tableSession = await storage.getTableSession(parseInt(tableSessionId));
+      if (!tableSession || tableSession.restaurantId !== restaurantId) {
+        return res.status(404).json({ message: 'Table session not found' });
+      }
+
+      // Validate customer exists and belongs to session
+      const customer = await storage.getCustomer(parseInt(customerId));
+      if (!customer || customer.tableSessionId !== parseInt(tableSessionId)) {
+        return res.status(404).json({ message: 'Customer not found or does not belong to session' });
+      }
+
+      // Calculate total from items
+      const total = items.reduce((sum, item) => {
+        return sum + (parseFloat(item.price) * item.quantity);
+      }, 0);
+
+      // Use tableId from session if not provided
+      if (!tableId) {
+        tableId = tableSession.tableId;
+      }
+
+      // Create the order
+      const orderData = {
+        restaurantId,
+        customerId: parseInt(customerId),
+        tableSessionId: parseInt(tableSessionId),
+        tableId,
+        orderNumber: '', // Will be generated by storage layer
+        status: 'pending',
+        total: total.toFixed(2),
+        notes: notes || null,
+        isGroupOrder: false
+      };
+
+      const order = await storage.createOrder(orderData);
+
+      // Batch create order items
+      const orderItemsArray = items.map((item: any) => ({
+          orderId: order.id,
+        menuItemId: parseInt(item.menuItemId),
+          quantity: item.quantity,
+        price: parseFloat(item.price).toFixed(2),
+          customizations: item.notes || null
+      }));
+      await storage.batchCreateOrderItems(orderItemsArray);
+
+      return res.status(201).json({
+        id: order.id,
+        orderNumber: order.orderNumber,
+        status: order.status,
+        total: order.total,
+        createdAt: order.createdAt
+      });
+    } catch (error: unknown) {
+      console.error('Error creating order:', error);
+      // Handle specific error types
+      if (error instanceof Error && error.message?.includes('not found')) {
+        return res.status(404).json({ message: error.message });
+      }
+      if (error instanceof Error && error.message?.includes('Cannot create order')) {
+        return res.status(400).json({ message: error.message });
+      }
+      if (error instanceof Error && error.message?.includes('does not belong to session')) {
+        return res.status(400).json({ message: error.message });
+      }
+      return res.status(500).json({ message: 'Failed to create order' });
+    }
+  });
+
+  // Public get orders for customer
+  app.get('/api/public/restaurants/:restaurantId/customers/:customerId/orders', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const customerId = parseInt(req.params.customerId);
+      
+      if (isNaN(restaurantId) || isNaN(customerId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or customer ID' });
+      }
+
+      const orders = await storage.getOrdersByCustomerId(customerId);
+      
+      // Filter by restaurant to ensure security
+      const restaurantOrders = orders.filter(order => order.restaurantId === restaurantId);
+      
+      return res.json(restaurantOrders);
+    } catch (error) {
+      console.error('Error fetching customer orders:', error);
+      return res.status(500).json({ message: 'Failed to fetch orders' });
+    }
+  });
+
+  // Public get orders for table session
+  app.get('/api/public/restaurants/:restaurantId/table-sessions/:sessionId/orders', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const sessionId = parseInt(req.params.sessionId);
+      
+      if (isNaN(restaurantId) || isNaN(sessionId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or session ID' });
+      }
+
+      const orders = await storage.getOrdersByTableSessionId(sessionId);
+      
+      // Filter by restaurant to ensure security
+      const restaurantOrders = orders.filter(order => order.restaurantId === restaurantId);
+      
+      // Get order items for each order with menu item details
+      const ordersWithItems = await Promise.all(
+        restaurantOrders.map(async (order) => {
+          const items = await storage.getOrderItemsByOrderId(order.id);
+          
+          // Fetch menu item details for each order item
+          const itemsWithDetails = await Promise.all(
+            items.map(async (item) => {
+              const menuItem = await storage.getMenuItem(item.menuItemId);
+              return {
+                ...item,
+                menuItem
+              };
+            })
+          );
+          
+          return { ...order, items: itemsWithDetails };
+        })
+      );
+      
+      return res.json(ordersWithItems);
+    } catch (error) {
+      console.error('Error fetching session orders:', error);
+      return res.status(500).json({ message: 'Failed to fetch orders' });
+    }
+  });
+
+  // Public get bills for table session
+  app.get('/api/public/restaurants/:restaurantId/table-sessions/:sessionId/bills', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const sessionId = parseInt(req.params.sessionId);
+      
+      if (isNaN(restaurantId) || isNaN(sessionId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or session ID' });
+      }
+
+      const bills = await storage.getBillsByTableSessionId(sessionId);
+      
+      return res.json(bills);
+    } catch (error) {
+      console.error('Error fetching session bills:', error);
+      return res.status(500).json({ message: 'Failed to fetch bills' });
+    }
+  });
+
+  // Public create bill for customer
+  app.post('/api/public/restaurants/:restaurantId/bills', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      // Validate required fields
+      const { billNumber, tableSessionId, customerId, type, subtotal, tax, tip, total } = req.body;
+      
+      if (!billNumber || !tableSessionId || !type || !subtotal || !total) {
+        return res.status(400).json({ message: 'Missing required fields' });
+      }
+
+      // Check if bill already exists for this customer and session (for individual bills)
+      if (customerId) {
+        const existingBill = await storage.getBillByCustomerAndSession(customerId, tableSessionId);
+        if (existingBill) {
+          return res.status(409).json({ message: 'Bill already exists for this customer and session' });
+        }
+      }
+
+      const bill = await storage.createBill({
+        billNumber,
+        tableSessionId,
+        customerId: customerId || null,
+        type,
+        subtotal,
+        tax: tax || '0.00',
+        tip: tip || '0.00',
+        total,
+        status: 'pending',
+        paymentMethod: req.body.paymentMethod || null
+      });
+
+      return res.status(201).json(bill);
+    } catch (error) {
+      console.error('Error creating bill:', error);
+      return res.status(500).json({ message: 'Failed to create bill' });
+    }
+  });
+
+  // Public mark bill as paid
+  app.post('/api/restaurants/:restaurantId/bills/:billId/pay', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const billId = parseInt(req.params.billId);
+      
+      if (isNaN(restaurantId) || isNaN(billId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or bill ID' });
+      }
+
+      const { paymentMethod } = req.body;
+
+      // Update bill status to paid
+      const updatedBill = await storage.updateBill(billId, {
+        status: 'paid',
+        paymentMethod: paymentMethod || 'cash',
+        paidAt: new Date()
+      });
+
+      if (!updatedBill) {
+        return res.status(404).json({ message: 'Bill not found' });
+      }
+
+      return res.json(updatedBill);
+    } catch (error) {
+      console.error('Error processing payment:', error);
+      return res.status(500).json({ message: 'Failed to process payment' });
+    }
+  });
+
+  // Public request waiter for bill
+  app.post('/api/public/restaurants/:restaurantId/table-sessions/:sessionId/request-bill', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const sessionId = parseInt(req.params.sessionId);
+      
+      if (isNaN(restaurantId) || isNaN(sessionId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or session ID' });
+      }
+
+      const { customerId, customerName } = req.body;
+
+      // Mark session as requesting bill
+      await storage.updateTableSession(sessionId, {
+        billRequested: true,
+        billRequestedAt: new Date()
+      });
+
+      // Create waiter request via WebSocket if available
+      const waiterRequest = {
+        id: Date.now(),
+        tableSessionId: sessionId,
+        customerId,
+        customerName: customerName || 'Customer',
+        requestType: 'bill-payment',
+        message: `${customerName || 'Customer'} is requesting the bill`,
+        status: 'pending',
+        timestamp: new Date().toISOString()
+      };
+
+      // Emit to restaurant staff via WebSocket
+      const io = req.app.get('io');
+      if (io) {
+        io.to(`restaurant-${restaurantId}`).emit('waiterRequest', waiterRequest);
+      }
+
+      return res.json({ message: 'Bill request sent to waiter', requestId: waiterRequest.id });
+    } catch (error) {
+      console.error('Error requesting bill:', error);
+      return res.status(500).json({ message: 'Failed to request bill' });
     }
   });
 
@@ -721,7 +1193,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 10; // Default to 10 for dashboard
+      console.log('API: Calling getActiveOrdersLightweight with:', { restaurantId, limit });
+      
       const orders = await storage.getActiveOrdersLightweight(restaurantId, limit);
+      
+      console.log('API: getActiveOrdersLightweight returned:', orders.length, 'orders');
+      console.log('API: First order sample:', orders[0]);
 
       return res.json(orders);
     } catch (error) {
@@ -806,10 +1283,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Send real-time notification to restaurant
       const { WebSocket } = await import('ws');
-      const clients = (global as any).wsClients || [];
+      const clients = (global as { wsClients?: Array<{ restaurantId: number; socket: WebSocket }> }).wsClients || [];
       
       // Send to all restaurant staff clients
-      clients.forEach((client: any) => {
+      clients.forEach((client) => {
         if (
           client.restaurantId === restaurantId && 
           client.socket.readyState === WebSocket.OPEN
@@ -872,12 +1349,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: 'Invalid restaurant ID' });
       }
 
-      const validation = dateRangeSchema.safeParse(req.body);
+      const validation = sharedDateRangeSchema.safeParse(req.body);
       if (!validation.success) {
         return res.status(400).json({ errors: validation.error.errors });
       }
 
-      const { startDate, endDate } = validation.data;
+      const { startDate: startDateStr, endDate: endDateStr } = validation.data;
+      const startDate = new Date(startDateStr);
+      const endDate = new Date(endDateStr);
       
       // Fetch all analytics data in parallel for better performance
       const [revenue, orderCount, averageOrderValue, tables] = await Promise.all([
@@ -907,12 +1386,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: 'Invalid restaurant ID' });
       }
 
-      const validation = dateRangeSchema.safeParse(req.body);
+      const validation = sharedDateRangeSchema.safeParse(req.body);
       if (!validation.success) {
         return res.status(400).json({ errors: validation.error.errors });
       }
 
-      const { startDate, endDate } = validation.data;
+      const { startDate: startDateStr, endDate: endDateStr } = validation.data;
+      const startDate = new Date(startDateStr);
+      const endDate = new Date(endDateStr);
       const revenue = await storage.getRestaurantRevenue(restaurantId, startDate, endDate);
       return res.json({ revenue });
     } catch (error) {
@@ -928,12 +1409,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: 'Invalid restaurant ID' });
       }
 
-      const validation = dateRangeSchema.safeParse(req.body);
+      const validation = sharedDateRangeSchema.safeParse(req.body);
       if (!validation.success) {
         return res.status(400).json({ errors: validation.error.errors });
       }
 
-      const { startDate, endDate } = validation.data;
+      const { startDate: startDateStr, endDate: endDateStr } = validation.data;
+      const startDate = new Date(startDateStr);
+      const endDate = new Date(endDateStr);
       const orderCount = await storage.getOrderCountByRestaurantId(restaurantId, startDate, endDate);
       return res.json({ orderCount });
     } catch (error) {
@@ -949,12 +1432,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: 'Invalid restaurant ID' });
       }
 
-      const validation = dateRangeSchema.safeParse(req.body);
+      const validation = sharedDateRangeSchema.safeParse(req.body);
       if (!validation.success) {
         return res.status(400).json({ errors: validation.error.errors });
       }
 
-      const { startDate, endDate } = validation.data;
+      const { startDate: startDateStr, endDate: endDateStr } = validation.data;
+      const startDate = new Date(startDateStr);
+      const endDate = new Date(endDateStr);
       const averageOrderValue = await storage.getAverageOrderValue(restaurantId, startDate, endDate);
       return res.json({ averageOrderValue });
     } catch (error) {
@@ -971,7 +1456,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 10;
-      const popularItems = await storage.getPopularMenuItems(restaurantId, limit);
+      const options: any = {};
+      if (req.query.startDate && req.query.endDate) {
+        options.startDate = new Date(req.query.startDate as string);
+        options.endDate = new Date(req.query.endDate as string);
+        console.log('Popular items API: Date range received:', { startDate: options.startDate, endDate: options.endDate });
+      }
+      console.log('Popular items API: Calling storage with options:', { restaurantId, limit, options });
+      const popularItems = await storage.getPopularMenuItems(restaurantId, limit, options);
+      console.log('Popular items API: Result:', popularItems);
       return res.json(popularItems);
     } catch (error) {
       console.error('Error fetching popular items:', error);
@@ -1133,8 +1626,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const timeframe = req.query.timeframe as 'day' | 'week' | 'month' || 'day';
+      
+      // Calculate date range based on timeframe (matching menu analytics structure)
       const now = new Date();
       let startDate: Date;
+      
       switch (timeframe) {
         case 'day':
           startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -1160,44 +1656,235 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       // Get order items for filtered orders
-      const orderItems = await Promise.all(
-        filteredOrders.map(order => storage.getOrderItemsByOrderId(order.id))
-      );
+      const orderItemsPromises = filteredOrders.map(order => storage.getOrderItemsByOrderId(order.id));
+      const orderItemsArrays = await Promise.all(orderItemsPromises);
+      const orderItems = orderItemsArrays.flat();
 
-      // Generate demand predictions for each menu item
-      const demandPredictions = menuItems.slice(0, 6).map(item => {
-        const itemOrders = orderItems.flat().filter(orderItem => orderItem.menuItemId === item.id);
+      // Get current period orders for real-time confidence adjustment
+      let currentPeriodStart: Date;
+      let currentPeriodOrders: any[];
+      let currentPeriodOrderItems: any[];
+      
+      switch (timeframe) {
+        case 'day':
+          // For daily view, current period is today
+          currentPeriodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+          currentPeriodOrders = orders.filter(order => {
+            const orderDate = new Date(order.createdAt);
+            return orderDate >= currentPeriodStart && orderDate <= now;
+          });
+          break;
+        case 'week':
+          // For weekly view, current period is current week
+          const weekStart = new Date(now);
+          weekStart.setDate(now.getDate() - now.getDay()); // Start of current week (Sunday)
+          weekStart.setHours(0, 0, 0, 0);
+          currentPeriodStart = weekStart;
+          currentPeriodOrders = orders.filter(order => {
+            const orderDate = new Date(order.createdAt);
+            return orderDate >= currentPeriodStart && orderDate <= now;
+          });
+          break;
+        case 'month':
+          // For monthly view, current period is current month
+          currentPeriodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+          currentPeriodOrders = orders.filter(order => {
+            const orderDate = new Date(order.createdAt);
+            return orderDate >= currentPeriodStart && orderDate <= now;
+          });
+          break;
+        default:
+          currentPeriodStart = startDate;
+          currentPeriodOrders = filteredOrders;
+      }
+
+      const currentPeriodOrderItemsPromises = currentPeriodOrders.map(order => storage.getOrderItemsByOrderId(order.id));
+      const currentPeriodOrderItemsArrays = await Promise.all(currentPeriodOrderItemsPromises);
+      currentPeriodOrderItems = currentPeriodOrderItemsArrays.flat();
+
+      // Generate demand predictions for each menu item with improved real-time logic
+      const demandPredictions = menuItems.slice(0, 8).map(item => {
+        const itemOrders = orderItems.filter(orderItem => orderItem.menuItemId === item.id);
+        const currentPeriodItemOrders = currentPeriodOrderItems.filter(orderItem => orderItem.menuItemId === item.id);
         const totalQuantity = itemOrders.reduce((sum: number, orderItem) => sum + orderItem.quantity, 0);
+        const currentPeriodQuantity = currentPeriodItemOrders.reduce((sum: number, orderItem) => sum + orderItem.quantity, 0);
         
-        // Simple prediction based on historical data
-        const avgDailyDemand = totalQuantity / 30;
-        const predictedDemand = Math.round(avgDailyDemand * 1.1); // 10% growth assumption
+        // Calculate demand prediction with timeframe-appropriate logic
+        const daysInPeriod = Math.max(1, Math.ceil((now.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)));
+        const avgDailyDemand = totalQuantity / daysInPeriod;
         
-        // Calculate confidence based on data consistency
-        const confidence = Math.min(95, Math.max(60, 80 + (totalQuantity / 10)));
-        
-        // Determine trend based on recent performance
-        const recentWeek = new Date();
-        recentWeek.setDate(recentWeek.getDate() - 7);
-        const recentItemOrders = itemOrders.filter(orderItem => {
-          const order = orders.find((o: any) => o.id === orderItem.orderId);
-          return order && new Date(order.createdAt) >= recentWeek;
+        // Calculate trend based on recent vs older data within the timeframe
+        const midPoint = new Date(startDate.getTime() + (now.getTime() - startDate.getTime()) / 2);
+        const recentOrders = itemOrders.filter(orderItem => {
+          const order = orders.find((o) => o.id === orderItem.orderId);
+          return order && new Date(order.createdAt) >= midPoint;
         });
-        const recentQuantity = recentItemOrders.reduce((sum: number, orderItem) => sum + orderItem.quantity, 0);
-        const previousWeekQuantity = totalQuantity - recentQuantity;
+        const olderOrders = itemOrders.filter(orderItem => {
+          const order = orders.find((o) => o.id === orderItem.orderId);
+          return order && new Date(order.createdAt) < midPoint;
+        });
         
-        const trend = recentQuantity > previousWeekQuantity ? 'up' : 
-                     recentQuantity < previousWeekQuantity ? 'down' : 'stable';
+        const recentQuantity = recentOrders.reduce((sum: number, orderItem) => sum + orderItem.quantity, 0);
+        const olderQuantity = olderOrders.reduce((sum: number, orderItem) => sum + orderItem.quantity, 0);
         
-        // Generate peak hours (simplified)
-        const peakHours = ['12:00 PM', '1:00 PM', '7:00 PM', '8:00 PM'];
+        // Calculate growth rate with minimum sample size requirements
+        const recentDays = Math.max(1, Math.ceil((now.getTime() - midPoint.getTime()) / (1000 * 60 * 60 * 24)));
+        const olderDays = Math.max(1, Math.ceil((midPoint.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)));
+        
+        const recentDailyAvg = recentQuantity / recentDays;
+        const olderDailyAvg = olderQuantity / olderDays;
+        
+        // Only calculate growth rate if we have sufficient data
+        let growthRate = 1.0; // No change by default
+        if (olderDailyAvg > 0 && olderQuantity >= 3 && recentQuantity >= 3) {
+          growthRate = recentDailyAvg / olderDailyAvg;
+          // Cap extreme growth rates to prevent unrealistic predictions
+          growthRate = Math.max(0.5, Math.min(2.0, growthRate));
+        }
+        
+        // Predict demand with growth trend and timeframe-specific adjustments
+        let predictedDemand = Math.round(avgDailyDemand * growthRate);
+        
+        // Adjust prediction based on timeframe
+        switch (timeframe) {
+          case 'day':
+            // For daily view, predict next day's demand
+            predictedDemand = Math.round(avgDailyDemand * growthRate);
+            break;
+          case 'week':
+            // For weekly view, predict next week's total demand
+            predictedDemand = Math.round(avgDailyDemand * 7 * growthRate);
+            break;
+          case 'month':
+            // For monthly view, predict next month's total demand
+            const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+            predictedDemand = Math.round(avgDailyDemand * daysInMonth * growthRate);
+            break;
+        }
+        
+        // Calculate real-time confidence with timeframe-appropriate adjustments
+        let confidence = 40; // Lower base confidence for more realistic assessment
+        
+        // Increase confidence based on data volume within the timeframe
+        if (totalQuantity >= 50) confidence += 25;
+        else if (totalQuantity >= 20) confidence += 20;
+        else if (totalQuantity >= 10) confidence += 15;
+        else if (totalQuantity >= 5) confidence += 10;
+        else if (totalQuantity >= 2) confidence += 5;
+        
+        // Increase confidence based on data consistency (lower variance = higher confidence)
+        if (itemOrders.length > 1) {
+          const quantities = itemOrders.map(oi => oi.quantity);
+          const mean = quantities.reduce((sum, q) => sum + q, 0) / quantities.length;
+          const variance = quantities.reduce((sum, q) => sum + Math.pow(q - mean, 2), 0) / quantities.length;
+          const stdDev = Math.sqrt(variance);
+          const coefficientOfVariation = stdDev / mean;
+          
+          // Lower coefficient of variation = higher confidence
+          if (coefficientOfVariation < 0.3) confidence += 20;
+          else if (coefficientOfVariation < 0.5) confidence += 15;
+          else if (coefficientOfVariation < 0.7) confidence += 10;
+          else if (coefficientOfVariation < 1.0) confidence += 5;
+        }
+        
+        // Real-time confidence adjustment based on current period activity
+        const currentHour = now.getHours();
+        const businessHours = currentHour >= 6 && currentHour <= 22; // Assume 6 AM to 10 PM business hours
+        
+        if (businessHours) {
+          // If item is being ordered in current period, increase confidence
+          if (currentPeriodQuantity > 0) {
+            confidence += Math.min(15, currentPeriodQuantity * 3); // +3% per order, max +15%
+          }
+          
+          // Adjust confidence based on timeframe-specific expectations
+          let expectedOrdersByNow: number;
+          switch (timeframe) {
+            case 'day':
+              const hoursSinceOpen = currentHour - 6;
+              expectedOrdersByNow = Math.round(avgDailyDemand * (hoursSinceOpen / 16)); // Assume 16-hour business day
+              break;
+            case 'week':
+              const daysSinceWeekStart = Math.ceil((now.getTime() - currentPeriodStart.getTime()) / (1000 * 60 * 60 * 24));
+              expectedOrdersByNow = Math.round(avgDailyDemand * daysSinceWeekStart);
+              break;
+            case 'month':
+              const daysSinceMonthStart = Math.ceil((now.getTime() - currentPeriodStart.getTime()) / (1000 * 60 * 60 * 24));
+              expectedOrdersByNow = Math.round(avgDailyDemand * daysSinceMonthStart);
+              break;
+            default:
+              expectedOrdersByNow = 0;
+          }
+          
+          if (currentPeriodQuantity >= expectedOrdersByNow * 0.8) {
+            confidence += 10; // Meeting expected demand
+          } else if (currentPeriodQuantity < expectedOrdersByNow * 0.5) {
+            confidence -= 10; // Below expected demand
+          }
+        }
+        
+        // Increase confidence for items with recent orders (last 24 hours)
+        const last24Hours = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        const recent24hOrders = itemOrders.filter(orderItem => {
+          const order = orders.find((o) => o.id === orderItem.orderId);
+          return order && new Date(order.createdAt) >= last24Hours;
+        });
+        
+        if (recent24hOrders.length > 0) {
+          confidence += Math.min(10, recent24hOrders.length * 2); // +2% per recent order, max +10%
+        }
+        
+        // Cap confidence at 95%
+        confidence = Math.min(95, Math.max(20, confidence));
+        
+        // Determine trend based on growth rate and current period activity
+        let trend: 'up' | 'down' | 'stable' = 'stable';
+        if (growthRate > 1.15 || currentPeriodQuantity > avgDailyDemand * 1.2) {
+          trend = 'up';
+        } else if (growthRate < 0.85 || (currentPeriodQuantity > 0 && currentPeriodQuantity < avgDailyDemand * 0.8)) {
+          trend = 'down';
+        }
+        
+        // Calculate peak hours from actual order timestamps within the timeframe
+        const orderHours = itemOrders.map(orderItem => {
+          const order = orders.find((o) => o.id === orderItem.orderId);
+          if (order) {
+            const orderDate = new Date(order.createdAt);
+            return orderDate.getHours();
+          }
+          return null;
+        }).filter(hour => hour !== null);
+        
+        // Find most common hours (peak hours)
+        const hourCounts = new Map<number, number>();
+        orderHours.forEach(hour => {
+          if (hour !== null) {
+            hourCounts.set(hour, (hourCounts.get(hour) || 0) + 1);
+          }
+        });
+        
+        // Get top 3 peak hours
+        const sortedHours = Array.from(hourCounts.entries())
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 3)
+          .map(([hour]) => {
+            const period = hour >= 12 ? 'PM' : 'AM';
+            const displayHour = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+            return `${displayHour}:00 ${period}`;
+          });
+        
+        // Fallback to default peak hours if no data
+        const peakHours = sortedHours.length > 0 ? sortedHours : ['12:00 PM', '1:00 PM', '7:00 PM'];
         
         return {
           item: item.name,
           predictedDemand,
           confidence: Math.round(confidence),
           peakHours,
-          trend
+          trend,
+          currentPeriodOrders: currentPeriodQuantity, // Current period orders for transparency
+          totalOrders: totalQuantity, // Total orders in timeframe for context
+          timeframe: timeframe // Include timeframe for frontend reference
         };
       });
 
@@ -1260,8 +1947,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         orderItemsByOrderId.get(orderId)!.push(item.orderItems);
       }
 
-      // Create a map of menu item names
-      const menuItemMap = new Map(menuItems.map(item => [item.id, item.name]));
+      // Create a map of menu item names and categories
+      const menuItemMap = new Map(menuItems.map(item => [item.id, { name: item.name, category: item.category || 'Uncategorized' }]));
 
       // Analyze food pairings
       const pairings = new Map<string, number>();
@@ -1273,14 +1960,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Get all unique item IDs in this order
         const itemIds = [...new Set(orderItemsForOrder.map(item => item.menuItemId))];
-        
-        // Generate all possible pairs
+        // Generate all possible pairs, but only if from different categories
         for (let i = 0; i < itemIds.length; i++) {
           for (let j = i + 1; j < itemIds.length; j++) {
-            const item1Name = menuItemMap.get(itemIds[i]);
-            const item2Name = menuItemMap.get(itemIds[j]);
-            if (item1Name && item2Name) {
-              const pairKey = [item1Name, item2Name].sort().join(' + ');
+            const item1 = menuItemMap.get(itemIds[i]);
+            const item2 = menuItemMap.get(itemIds[j]);
+            if (item1 && item2 && item1.category !== item2.category) {
+              const pairKey = [item1.name, item2.name].sort().join(' + ');
               pairings.set(pairKey, (pairings.get(pairKey) || 0) + 1);
             }
           }
@@ -1300,7 +1986,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Generate recommendations based on pairings
       const recommendations = [];
-      
       // Recommend promoting popular pairings
       topPairings.slice(0, 3).forEach(pairing => {
         if (pairing.count >= 3) {
@@ -1313,18 +1998,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       });
 
-      // Find items that are rarely paired
+      // Find items that are rarely paired (from different categories only)
       const allItems = new Set(menuItems.map(item => item.name));
       const pairedItems = new Set(topPairings.flatMap(p => p.items));
       const unpairedItems = Array.from(allItems).filter(item => !pairedItems.has(item));
 
-      if (unpairedItems.length > 0) {
+      // Only suggest pairings between unpaired items from different categories
+      if (unpairedItems.length > 1) {
+        // Build a list of unpaired items with their categories
+        const unpairedWithCat = menuItems.filter(item => unpairedItems.includes(item.name)).map(item => ({ name: item.name, category: item.category || 'Uncategorized' }));
+        // Find the first 3 pairs from different categories
+        const suggestedPairs = [];
+        for (let i = 0; i < unpairedWithCat.length; i++) {
+          for (let j = i + 1; j < unpairedWithCat.length; j++) {
+            if (unpairedWithCat[i].category !== unpairedWithCat[j].category) {
+              suggestedPairs.push(unpairedWithCat[i].name + ' + ' + unpairedWithCat[j].name);
+              if (suggestedPairs.length >= 3) break;
+            }
+          }
+          if (suggestedPairs.length >= 3) break;
+        }
+        if (suggestedPairs.length > 0) {
         recommendations.push({
           type: 'suggest_pairing',
-          items: unpairedItems.slice(0, 3),
-          reason: 'These items are rarely ordered together. Consider suggesting pairings to customers.',
-          potential_revenue: unpairedItems.length * 1.5
-        });
+            items: suggestedPairs[0].split(' + '),
+            reason: 'These items are rarely ordered together and are from different categories. Consider suggesting pairings to customers.',
+            potential_revenue: suggestedPairs.length * 1.5
+          });
+        }
       }
 
       return res.json({
@@ -1607,17 +2308,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const restaurantId = parseInt(req.params.restaurantId);
       if (isNaN(restaurantId)) return res.status(400).json({ message: 'Invalid restaurant ID' });
 
-      const validation = dateRangeSchema.safeParse(req.body);
+      const validation = sharedDateRangeSchema.safeParse(req.body);
       if (!validation.success) {
         return res.status(400).json({ errors: validation.error.errors });
       }
 
-      const { startDate, endDate } = validation.data;
+      const { startDate: startDateStr, endDate: endDateStr } = validation.data;
+      const startDate = new Date(startDateStr);
+      const endDate = new Date(endDateStr);
       const insights = await generateAnalyticsInsights({ restaurantId, startDate, endDate });
       return res.json(insights);
     } catch (error) {
       console.error('Error generating analytics AI insights:', error);
       return res.status(500).json({ message: 'Failed to generate analytics AI insights' });
+    }
+  });
+
+  // Quick Stats Endpoint
+  app.get('/api/restaurants/:restaurantId/quick-stats', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      const { getQuickStats } = await import('./ai.js');
+      const stats = await getQuickStats(restaurantId);
+      return res.json(stats);
+    } catch (error) {
+      console.error('Error fetching quick stats:', error);
+      return res.status(500).json({ message: 'Failed to fetch quick stats' });
+    }
+  });
+
+  // Historical Comparison Endpoint
+  app.get('/api/restaurants/:restaurantId/historical-comparison', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const days = req.query.days ? parseInt(req.query.days as string) : 7;
+      
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      const { getHistoricalComparison } = await import('./ai.js');
+      const comparison = await getHistoricalComparison(restaurantId, days);
+      return res.json(comparison);
+    } catch (error) {
+      console.error('Error fetching historical comparison:', error);
+      return res.status(500).json({ message: 'Failed to fetch historical comparison' });
     }
   });
 
@@ -1655,6 +2394,78 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Optimized join session endpoint
+  app.post('/api/public/restaurants/:restaurantId/join-session', async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+      const { tableId, customerName, email, phone, isMainCustomer } = req.body;
+      if (!tableId || isNaN(parseInt(tableId))) {
+        return res.status(400).json({ message: 'Valid table ID is required' });
+      }
+      if (!customerName || !customerName.trim()) {
+        return res.status(400).json({ message: 'Customer name is required' });
+      }
+      // Find or create active session for this table
+      let session = null;
+      const sessions = await storage.getTableSessionsByRestaurantId(restaurantId);
+      session = sessions.find(s => s.tableId === parseInt(tableId) && ['waiting', 'active'].includes(s.status));
+      if (!session) {
+        // Create new session
+        const table = await storage.getTable(parseInt(tableId));
+        if (!table || table.restaurantId !== restaurantId) {
+          return res.status(404).json({ message: 'Table not found' });
+        }
+        session = await storage.createTableSession({
+          restaurantId,
+          tableId: parseInt(tableId),
+          partySize: 1,
+          status: 'waiting',
+          sessionName: `Table ${table.number}`,
+          splitType: 'individual'
+        });
+      }
+      // Add customer if not present
+      let customer = null;
+      const customers = await storage.getCustomersByTableSessionId(session.id);
+      customer = customers.find(c => c.name === customerName && c.email === (email?.trim() || null));
+      if (!customer) {
+        customer = await storage.createCustomer({
+          tableSessionId: session.id,
+          name: customerName.trim(),
+          email: email?.trim() || null,
+          phone: phone?.trim() || null,
+          isMainCustomer: isMainCustomer || false
+        });
+        // If main customer, we could update the session in the future
+        if (isMainCustomer) {
+          // TODO: Add mainCustomerId field to tableSessions schema if needed
+          console.log(`Main customer ${customer.id} created for session ${session.id}`);
+        }
+      }
+      // Return session, customer, and all customers
+      const allCustomers = await storage.getCustomersByTableSessionId(session.id);
+      return res.status(200).json({ session, customer, customers: allCustomers });
+    } catch (error) {
+      console.error('Error in join-session:', error);
+      return res.status(500).json({ message: 'Failed to join session' });
+    }
+  });
+
+  // Admin endpoint to cleanup empty sessions and ghost customers
+  app.post('/api/admin/cleanup-empty-sessions', async (req, res) => {
+    try {
+      const timeoutMinutes = req.body.timeoutMinutes || 30;
+      const result = await storage.cleanupEmptySessions(timeoutMinutes);
+      return res.json(result);
+    } catch (error) {
+      console.error('Error cleaning up empty sessions:', error);
+      return res.status(500).json({ message: 'Failed to cleanup empty sessions' });
+    }
+  });
+
   // Create HTTP server
   console.log("Creating HTTP server...");
   const httpServer = createServer(app);
@@ -1665,6 +2476,349 @@ export async function registerRoutes(app: Express): Promise<Server> {
   setupWebSocketServer(httpServer);
   console.log("WebSocket server set up successfully");
 
+  // Application Feedback Routes
+  console.log("Setting up application feedback routes...");
+  app.post('/api/restaurants/:restaurantId/application-feedback', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+      const validation = insertApplicationFeedbackSchema.safeParse({
+        ...req.body,
+        restaurantId,
+        userId: req.session.user?.id || null
+      });
+      if (!validation.success) {
+        return res.status(400).json({ errors: validation.error.errors });
+      }
+      const feedback = await storage.createApplicationFeedback(validation.data);
+      return res.status(201).json(feedback);
+    } catch (error) {
+      console.error('Error creating application feedback:', error);
+      return res.status(500).json({ message: 'Failed to create application feedback' });
+    }
+  });
+
+  app.get('/api/restaurants/:restaurantId/application-feedback', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+      const feedbackList = await storage.getApplicationFeedbackByRestaurantId(restaurantId);
+      return res.json(feedbackList);
+    } catch (error) {
+      console.error('Error fetching application feedback:', error);
+      return res.status(500).json({ message: 'Failed to fetch application feedback' });
+    }
+  });
+
   console.log("Route registration completed successfully");
+
+  // Batch API endpoint for session data with orders, customers, and bills
+  app.get('/api/restaurants/:restaurantId/table-sessions/:sessionId/combined', authenticate, authorizeRestaurant, async (req, res, next) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const sessionId = parseInt(req.params.sessionId);
+      
+      if (isNaN(restaurantId) || isNaN(sessionId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or session ID' });
+      }
+
+      // Get session data
+      const session = await storage.getTableSession(sessionId);
+      
+      if (!session) {
+        return res.status(404).json({ message: 'Table session not found' });
+      }
+      
+      if (session.restaurantId !== restaurantId) {
+        return res.status(403).json({ message: 'Session does not belong to this restaurant' });
+      }
+      
+      // Get all related data in parallel
+      const [sessionCustomers, sessionOrders, sessionBills, sessionTable] = await Promise.all([
+        storage.getCustomersByTableSessionId(sessionId),
+        storage.getOrdersByTableSessionId(sessionId),
+        storage.getBillsByTableSessionId(sessionId),
+        session.tableId ? storage.getTable(session.tableId) : null
+      ]);
+      
+      // Get menu items for all orders
+      const menuItemIds = new Set<number>();
+      sessionOrders.forEach((order: any) => {
+        if (order.items && Array.isArray(order.items)) {
+          order.items.forEach((item: any) => {
+            menuItemIds.add(item.menuItemId);
+          });
+        }
+      });
+      
+      // If there are menu items, fetch them
+      let menuItems: any[] = [];
+      if (menuItemIds.size > 0) {
+        menuItems = await storage.getMenuItemsByIds(Array.from(menuItemIds));
+      }
+      
+      // Build menu item lookup map
+      const menuItemsMap = menuItems.reduce((acc: Record<number, any>, item: any) => {
+        acc[item.id] = item;
+        return acc;
+      }, {} as Record<number, any>);
+      
+      // Enhance orders with menu item details
+      const enhancedOrders = sessionOrders.map((order: any) => {
+        return {
+          ...order,
+          items: order.items && Array.isArray(order.items) ? order.items.map((item: any) => {
+            const menuItem = menuItemsMap[item.menuItemId];
+            return {
+              ...item,
+              menuItemName: menuItem?.name || 'Unknown Item',
+              menuItemPrice: menuItem?.price || '0.00',
+              category: menuItem?.category || 'Uncategorized'
+            };
+          }) : []
+        };
+      });
+      
+      // Group orders by customer
+      const ordersByCustomer = enhancedOrders.reduce((acc: Record<number, any[]>, order: any) => {
+        if (!acc[order.customerId]) {
+          acc[order.customerId] = [];
+        }
+        acc[order.customerId].push(order);
+        return acc;
+      }, {} as Record<number, any[]>);
+      
+      // Combine bills with customers
+      const customersWithBills = sessionCustomers.map(customer => {
+        const customerBills = sessionBills.filter(bill => bill.customerId === customer.id);
+        const customerOrders = ordersByCustomer[customer.id] || [];
+        const totalAmount = customerOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
+        
+        return {
+          ...customer,
+          bills: customerBills,
+          orders: customerOrders,
+          totalAmount: totalAmount.toFixed(2)
+        };
+      });
+      
+      // Build the combined response
+      const combinedData = {
+        session: {
+          ...session,
+          table: sessionTable
+        },
+        customers: customersWithBills,
+        orders: enhancedOrders,
+        bills: sessionBills,
+        combinedBills: sessionBills.filter(bill => bill.type === 'combined'),
+      };
+      
+      return res.json(combinedData);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Add endpoint to check session completion status
+  app.get('/api/restaurants/:restaurantId/table-sessions/:sessionId/completion-status', authenticate, authorizeRestaurant, async (req, res, next) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const sessionId = parseInt(req.params.sessionId);
+      
+      if (isNaN(restaurantId) || isNaN(sessionId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or session ID' });
+      }
+
+      // Check if session belongs to restaurant
+      const session = await storage.getTableSession(sessionId);
+      if (!session) {
+        return res.status(404).json({ message: 'Table session not found' });
+      }
+      
+      if (session.restaurantId !== restaurantId) {
+        return res.status(403).json({ message: 'Session does not belong to this restaurant' });
+      }
+
+      // Check if session can be completed
+      const completionStatus = await storage.canCompleteSession(sessionId);
+      return res.json(completionStatus);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Add endpoint to force-complete a session
+  app.post('/api/restaurants/:restaurantId/table-sessions/:sessionId/force-complete', authenticate, authorizeRestaurant, async (req, res, next) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const sessionId = parseInt(req.params.sessionId);
+      
+      if (isNaN(restaurantId) || isNaN(sessionId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or session ID' });
+      }
+
+      // Check if session belongs to restaurant
+      const session = await storage.getTableSession(sessionId);
+      if (!session) {
+        return res.status(404).json({ message: 'Table session not found' });
+      }
+      
+      if (session.restaurantId !== restaurantId) {
+        return res.status(403).json({ message: 'Session does not belong to this restaurant' });
+      }
+
+      const { reason = 'Forced by admin' } = req.body;
+      await storage.forceCompleteSession(sessionId, reason);
+      
+      return res.json({ 
+        success: true, 
+        message: 'Session force-completed successfully',
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Create a bill
+  app.post('/api/restaurants/:restaurantId/bills', authenticate, authorizeRestaurant, async (req, res, next) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      // Validate with shared schema
+      const validation = validateData(billSchema, req.body);
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: 'Invalid bill data', 
+          errors: validation.errors 
+        });
+      }
+      const validatedData = validation.data;
+
+      // --- PATCH START: Always calculate bill total from orders ---
+      const { tableSessionId, customerId, type, selectedCustomerIds } = validatedData;
+      // Fetch all orders for the session
+      const orders = await storage.getOrdersByTableSessionId(tableSessionId);
+      let relevantOrders;
+      if (type === 'individual') {
+        relevantOrders = orders.filter(order => order.customerId === customerId);
+      } else if (type === 'combined') {
+        relevantOrders = orders;
+      } else if (type === 'partial' && Array.isArray(selectedCustomerIds)) {
+        relevantOrders = orders.filter(order => selectedCustomerIds.includes(order.customerId));
+      } else {
+        return res.status(400).json({ message: 'Invalid bill type or missing customer selection' });
+      }
+      const subtotal = relevantOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
+      if (subtotal === 0) {
+        return res.status(400).json({ message: 'Cannot generate bill: no orders found for selection' });
+      }
+      // --- PATCH END ---
+
+      // Helper function to generate a bill number
+      const generateBillNumber = () => {
+        const timestamp = Date.now();
+        const random = Math.floor(Math.random() * 1000);
+        return `BILL-${timestamp}-${random}`;
+      };
+
+      // Check if bill already exists for this customer and session (for individual bills)
+      if (validatedData && validatedData.customerId) {
+        const existingBill = await storage.getBillByCustomerAndSession(validatedData.customerId, validatedData.tableSessionId);
+        if (existingBill) {
+          return res.status(409).json({ message: 'Bill already exists for this customer and session' });
+        }
+      }
+
+      if (!validatedData) {
+        return res.status(400).json({ message: 'Invalid bill data' });
+      }
+
+      const bill = await storage.createBill({
+        ...validatedData,
+        subtotal: subtotal.toFixed(2),
+        total: subtotal.toFixed(2),
+        billNumber: validatedData.billNumber || generateBillNumber(),
+        status: validatedData.status || 'pending',
+        tax: validatedData.tax || '0.00',
+        tip: validatedData.tip || '0.00'
+      });
+
+      return res.status(201).json(bill);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Update a bill
+  app.put('/api/restaurants/:restaurantId/bills/:billId', authenticate, authorizeRestaurant, async (req, res, next) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const billId = parseInt(req.params.billId);
+      
+      if (isNaN(restaurantId) || isNaN(billId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or bill ID' });
+      }
+
+      // Validate with shared schema
+      const validation = validateData(updateBillSchema, req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: 'Invalid bill data', 
+          errors: validation.errors 
+        });
+      }
+
+      // Check if bill belongs to restaurant
+      const bill = await storage.getBill(billId);
+      if (!bill) {
+        return res.status(404).json({ message: 'Bill not found' });
+      }
+      
+      const session = await storage.getTableSession(bill.tableSessionId);
+      if (!session || session.restaurantId !== restaurantId) {
+        return res.status(403).json({ message: 'Bill does not belong to this restaurant' });
+      }
+
+      // Ensure validation.data is not undefined
+      if (!validation.data) {
+        return res.status(400).json({ message: 'Invalid bill data' });
+      }
+
+      const updatedBill = await storage.updateBill(billId, validation.data);
+      if (!updatedBill) {
+        return res.status(404).json({ message: 'Bill not found' });
+      }
+
+      return res.json(updatedBill);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Public endpoint for restaurant info (no auth required)
+  app.get('/api/public/restaurants/:restaurantId', async (req, res) => {
+    const restaurantId = parseInt(req.params.restaurantId);
+    if (isNaN(restaurantId)) {
+      return res.status(400).json({ message: 'Invalid restaurant ID' });
+    }
+    const restaurant = await storage.getRestaurant(restaurantId);
+    if (!restaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' });
+    }
+    // Exclude sensitive fields
+    const { password, ...publicRestaurant } = restaurant;
+    return res.json(publicRestaurant);
+  });
+
   return httpServer;
 }

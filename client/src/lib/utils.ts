@@ -5,34 +5,131 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatCurrency(amount: number | string): string {
-  const value = typeof amount === 'string' ? parseFloat(amount) : amount;
+export function formatCurrency(value: number | string): string {
+  const numValue = typeof value === 'string' ? parseFloat(value) : value;
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
     minimumFractionDigits: 2,
-  }).format(value);
+    maximumFractionDigits: 2
+  }).format(numValue);
 }
 
 export function formatDate(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;
-  return d.toLocaleDateString('en-US', {
+  return new Intl.DateTimeFormat('en-US', {
     year: 'numeric',
     month: 'short',
-    day: 'numeric',
-  });
+    day: 'numeric'
+  }).format(d);
 }
 
 export function formatTime(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;
-  return d.toLocaleTimeString('en-US', {
+  return new Intl.DateTimeFormat('en-US', {
     hour: 'numeric',
-    minute: '2-digit',
-  });
+    minute: 'numeric'
+  }).format(d);
 }
 
 export function formatDateTime(date: Date | string): string {
-  return `${formatDate(date)} at ${formatTime(date)}`;
+  const d = typeof date === 'string' ? new Date(date) : date;
+  return `${formatDate(d)} ${formatTime(d)}`;
+}
+
+export function calculateTimeAgo(date: string | Date): string {
+  const now = new Date();
+  const past = new Date(date);
+  const diffMs = now.getTime() - past.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  
+  if (diffMins < 1) return 'just now';
+  if (diffMins === 1) return '1 minute ago';
+  if (diffMins < 60) return `${diffMins} minutes ago`;
+  
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours === 1) return '1 hour ago';
+  if (diffHours < 24) return `${diffHours} hours ago`;
+  
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays === 1) return 'yesterday';
+  if (diffDays < 7) return `${diffDays} days ago`;
+  
+  return formatDate(past);
+}
+
+/**
+ * Generates a hash code from a string
+ */
+export function hashCode(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return hash;
+}
+
+/**
+ * Creates a debounced function that delays invoking func until after wait milliseconds
+ * have elapsed since the last time the debounced function was invoked.
+ */
+export function debounce<T extends (...args: any[]) => any>(
+  func: T,
+  wait: number = 300
+): (...args: Parameters<T>) => void {
+  let timeout: NodeJS.Timeout | null = null;
+  
+  return function(...args: Parameters<T>): void {
+    const later = () => {
+      timeout = null;
+      func(...args);
+    };
+    
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    timeout = setTimeout(later, wait);
+  };
+}
+
+/**
+ * Creates a throttled function that only invokes func at most once per every wait milliseconds.
+ */
+export function throttle<T extends (...args: any[]) => any>(
+  func: T,
+  wait: number = 300
+): (...args: Parameters<T>) => void {
+  let timeout: NodeJS.Timeout | null = null;
+  let lastArgs: Parameters<T> | null = null;
+  let lastCallTime = 0;
+  
+  return function(...args: Parameters<T>): void {
+    const now = Date.now();
+    const timeSinceLastCall = now - lastCallTime;
+    
+    // Store the latest arguments
+    lastArgs = args;
+    
+    // If this is the first call or if enough time has passed
+    if (timeSinceLastCall >= wait) {
+      lastCallTime = now;
+      func(...args);
+    } else {
+      // Otherwise, set a timeout for the remaining time
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      
+      timeout = setTimeout(() => {
+        lastCallTime = Date.now();
+        func(...(lastArgs as Parameters<T>));
+        lastArgs = null;
+        timeout = null;
+      }, wait - timeSinceLastCall);
+    }
+  };
 }
 
 export function getInitials(name: string): string {
@@ -102,29 +199,6 @@ export function truncateText(text: string, maxLength: number): string {
 
 export function generateOrderId(): string {
   return '#ORD-' + Math.floor(1000 + Math.random() * 9000);
-}
-
-export function calculateTimeAgo(date: Date | string): string {
-  const now = new Date();
-  const then = typeof date === 'string' ? new Date(date) : date;
-  const diffInSeconds = Math.floor((now.getTime() - then.getTime()) / 1000);
-  
-  if (diffInSeconds < 60) {
-    return `${diffInSeconds} sec ago`;
-  }
-  
-  const diffInMinutes = Math.floor(diffInSeconds / 60);
-  if (diffInMinutes < 60) {
-    return `${diffInMinutes} min ago`;
-  }
-  
-  const diffInHours = Math.floor(diffInMinutes / 60);
-  if (diffInHours < 24) {
-    return `${diffInHours} hr ago`;
-  }
-  
-  const diffInDays = Math.floor(diffInHours / 24);
-  return `${diffInDays} day${diffInDays !== 1 ? 's' : ''} ago`;
 }
 
 export function slugify(text: string): string {

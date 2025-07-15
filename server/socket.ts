@@ -1,7 +1,8 @@
 import { Server as HttpServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { storage } from './storage';
 import { z } from 'zod';
+import { storage } from './storage';
+import { Order } from '../shared/schema';
 
 // Define message types with Zod schemas for validation
 const orderStatusUpdateSchema = z.object({
@@ -24,7 +25,8 @@ const waiterRequestSchema = z.object({
   tableSessionId: z.number().optional()
 });
 
-const socketMessageSchema = z.object({
+// Define WebSocket message schema
+export const socketMessageSchema = z.object({
   type: z.string(),
   payload: z.record(z.unknown())
 });
@@ -43,7 +45,7 @@ export interface OrderStatusUpdate {
 
 export interface NewOrder {
   restaurantId: number;
-  order: any;
+  order: Order;
 }
 
 export interface WaiterRequest {
@@ -129,10 +131,34 @@ export const setupWebSocketServer = (server: HttpServer) => {
     // Handle messages from client
     socket.on('message', async (data: string) => {
       try {
+        // Parse JSON data
+        let parsed;
+        try {
+          parsed = JSON.parse(data);
+        } catch (parseError) {
+          console.error('[WebSocket] Error parsing message:', parseError);
+          socket.send(JSON.stringify({
+            type: 'error',
+            payload: {
+              message: 'Invalid JSON format'
+            }
+          }));
+          return;
+        }
+        
         // Validate message format
-        const message = socketMessageSchema.parse(JSON.parse(data));
+        const message = socketMessageSchema.parse(parsed);
         
         switch (message.type) {
+          case 'ping': {
+            // Handle ping request with pong response
+            socket.send(JSON.stringify({
+              type: 'pong',
+              payload: { timestamp: Date.now() }
+            }));
+            break;
+          }
+            
           case 'register-restaurant': {
             // Register this connection as belonging to a restaurant
             const restaurantId = z.number().parse(message.payload.restaurantId);

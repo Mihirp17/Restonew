@@ -11,10 +11,11 @@ import {
   type AiInsight, type InsertAiInsight, aiInsights,
   type TableSession, type InsertTableSession, tableSessions,
   type Customer, type InsertCustomer, customers,
-  type Bill, type InsertBill, bills
+  type Bill, type InsertBill, bills,
+  type ApplicationFeedback, type InsertApplicationFeedback, applicationFeedback
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, sql, inArray, lt, ne } from "drizzle-orm";
 import bcrypt from 'bcryptjs';
 
 // Generic storage interface with all required methods
@@ -62,6 +63,8 @@ export interface IStorage {
   createOrder(order: InsertOrder): Promise<Order>;
   updateOrder(id: number, order: Partial<InsertOrder>): Promise<Order | undefined>;
   deleteOrder(id: number): Promise<boolean>;
+  getOrdersByCustomerId(customerId: number): Promise<Order[]>;
+  getOrdersByTableSessionId(tableSessionId: number): Promise<Order[]>;
   
   // OrderItem Methods
   getOrderItem(id: number): Promise<OrderItem | undefined>;
@@ -82,6 +85,10 @@ export interface IStorage {
   getFeedbackByRestaurantId(restaurantId: number, options?: { startDate?: Date, endDate?: Date }): Promise<Feedback[]>;
   createFeedback(feedback: InsertFeedback): Promise<Feedback>;
 
+  // Application Feedback Methods
+  createApplicationFeedback(feedbackItem: InsertApplicationFeedback): Promise<ApplicationFeedback>;
+  getApplicationFeedbackByRestaurantId(restaurantId: number): Promise<ApplicationFeedback[]>;
+
   // Analytics Methods
   getRestaurantRevenue(restaurantId: number, startDate: Date, endDate: Date): Promise<number>;
   getOrderCountByRestaurantId(restaurantId: number, startDate: Date, endDate: Date): Promise<number>;
@@ -92,9 +99,9 @@ export interface IStorage {
   // updateRestaurantStripeInfo removed - placeholder implementation
   
   // AI Insights methods
-  getAiInsightsByRestaurantId(restaurantId: number): Promise<any[]>;
-  createAiInsight(insight: any): Promise<any>;
-  updateAiInsight(insightId: number, updates: any): Promise<any>;
+  getAiInsightsByRestaurantId(restaurantId: number): Promise<AiInsight[]>;
+  createAiInsight(insight: InsertAiInsight): Promise<AiInsight>;
+  updateAiInsight(insightId: number, updates: Partial<InsertAiInsight>): Promise<AiInsight>;
   markAiInsightAsRead(insightId: number): Promise<void>;
   updateAiInsightStatus(insightId: number, status: string): Promise<void>;
 
@@ -122,9 +129,11 @@ export interface IStorage {
   calculateSessionTotals(tableSessionId: number): Promise<void>;
   invalidateSessionCache(tableSessionId: number): Promise<void>;
   syncTableOccupancy(restaurantId: number): Promise<void>;
+  cleanupEmptySessions(timeoutMinutes: number): Promise<{ removedSessions: number, removedCustomers: number }>;
 
   // Mock menu items for test restaurant
   getMenuItems(restaurantId: number): Promise<MenuItem[]>;
+  getMenuItemsByIds(menuItemIds: number[]): Promise<MenuItem[]>;
 
   // Log or update a chat session for a restaurant
   logAiChatSession(params: { restaurantId: number, userId?: number, sessionId?: string }): Promise<number | undefined>;
@@ -133,101 +142,19 @@ export interface IStorage {
   countAiChatSessionsLast24h(restaurantId: number): Promise<number>;
 }
 
-// Mock menu items for test restaurant
-const mockMenuItems = [
-  {
-    id: 1,
-    name: "Classic Margherita",
-    description: "Fresh tomatoes, mozzarella, basil, and olive oil",
-    price: "12.99",
-    category: "Pizza",
-    isAvailable: true,
-    image: null
-  },
-  {
-    id: 2,
-    name: "Pepperoni Feast",
-    description: "Loaded with pepperoni and extra cheese",
-    price: "14.99",
-    category: "Pizza",
-    isAvailable: true,
-    image: null
-  },
-  {
-    id: 3,
-    name: "Garlic Bread",
-    description: "Toasted bread with garlic butter and herbs",
-    price: "5.99",
-    category: "Starters",
-    isAvailable: true,
-    image: null
-  },
-  {
-    id: 4,
-    name: "Caesar Salad",
-    description: "Fresh romaine lettuce, croutons, parmesan, and Caesar dressing",
-    price: "8.99",
-    category: "Starters",
-    isAvailable: true,
-    image: null
-  },
-  {
-    id: 5,
-    name: "Spaghetti Bolognese",
-    description: "Classic pasta with meat sauce and parmesan",
-    price: "13.99",
-    category: "Pasta",
-    isAvailable: true,
-    image: null
-  },
-  {
-    id: 6,
-    name: "Fettuccine Alfredo",
-    description: "Creamy parmesan sauce with garlic and herbs",
-    price: "12.99",
-    category: "Pasta",
-    isAvailable: true,
-    image: null
-  },
-  {
-    id: 7,
-    name: "Chocolate Lava Cake",
-    description: "Warm chocolate cake with a molten center, served with vanilla ice cream",
-    price: "7.99",
-    category: "Desserts",
-    isAvailable: true,
-    image: null
-  },
-  {
-    id: 8,
-    name: "Tiramisu",
-    description: "Classic Italian dessert with coffee-soaked ladyfingers and mascarpone cream",
-    price: "6.99",
-    category: "Desserts",
-    isAvailable: true,
-    image: null
-  },
-  {
-    id: 9,
-    name: "Soft Drinks",
-    description: "Choice of Coke, Sprite, Fanta, or Diet Coke",
-    price: "2.99",
-    category: "Drinks",
-    isAvailable: true,
-    image: null
-  },
-  {
-    id: 10,
-    name: "Fresh Lemonade",
-    description: "Homemade lemonade with mint",
-    price: "3.99",
-    category: "Drinks",
-    isAvailable: true,
-    image: null
-  }
-];
-
 export class DatabaseStorage implements IStorage {
+  // Transaction wrapper utility for standardizing transaction usage
+  private async withTransaction<T>(callback: (tx: any) => Promise<T>): Promise<T> {
+    return db.transaction(async (tx) => {
+      try {
+        return await callback(tx);
+      } catch (error) {
+        console.error('Transaction error:', error);
+        throw error;
+      }
+    });
+  }
+
   constructor() {
     this.initializeDefaultAdmin();
   }
@@ -420,35 +347,81 @@ export class DatabaseStorage implements IStorage {
     return order;
   }
 
-  async getOrdersByRestaurantId(restaurantId: number, options: { startDate?: Date, endDate?: Date } = {}): Promise<Order[]> {
+  async getOrdersByRestaurantId(restaurantId: number, options: { startDate?: Date, endDate?: Date } = {}): Promise<any[]> {
     const { startDate, endDate } = options;
     const conditions = [eq(orders.restaurantId, restaurantId)];
     if (startDate && endDate) {
       conditions.push(sql`${orders.createdAt} BETWEEN ${startDate} AND ${endDate}`);
     }
-    const query = db.select().from(orders).where(and(...conditions as any)).orderBy(desc(orders.createdAt));
-    return await query;
+    
+    const result = await db.select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      displayOrderNumber: orders.displayOrderNumber,
+      status: orders.status,
+      total: orders.total,
+      createdAt: orders.createdAt,
+      updatedAt: orders.updatedAt,
+      customerId: orders.customerId,
+      tableSessionId: orders.tableSessionId,
+      restaurantId: orders.restaurantId,
+      tableId: orders.tableId,
+      notes: orders.notes,
+      isGroupOrder: orders.isGroupOrder,
+      customerName: customers.name,
+      tableNumber: tables.number
+    })
+    .from(orders)
+    .leftJoin(customers, eq(orders.customerId, customers.id))
+    .leftJoin(tables, eq(orders.tableId, tables.id))
+    .where(and(...conditions as any))
+    .orderBy(desc(orders.createdAt));
+    
+    return result;
   }
 
-  async getActiveOrdersByRestaurantId(restaurantId: number, limit?: number): Promise<Order[]> {
-    // Get orders that aren't completed or cancelled
-    return await db.select()
-      .from(orders)
-      .where(
-        and(
-          eq(orders.restaurantId, restaurantId),
-          sql`${orders.status} NOT IN ('completed', 'cancelled')`
-        )
+  async getActiveOrdersByRestaurantId(restaurantId: number, limit?: number): Promise<any[]> {
+    // Get orders that aren't completed or cancelled with table and customer info
+    const result = await db.select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      displayOrderNumber: orders.displayOrderNumber,
+      status: orders.status,
+      total: orders.total,
+      createdAt: orders.createdAt,
+      updatedAt: orders.updatedAt,
+      customerId: orders.customerId,
+      tableSessionId: orders.tableSessionId,
+      restaurantId: orders.restaurantId,
+      tableId: orders.tableId,
+      notes: orders.notes,
+      isGroupOrder: orders.isGroupOrder,
+      customerName: customers.name,
+      tableNumber: tables.number
+    })
+    .from(orders)
+    .leftJoin(customers, eq(orders.customerId, customers.id))
+    .leftJoin(tables, eq(orders.tableId, tables.id))
+    .where(
+      and(
+        eq(orders.restaurantId, restaurantId),
+        sql`${orders.status} NOT IN ('completed', 'cancelled')`
       )
-      .orderBy(desc(orders.createdAt))
-      .limit(limit || 10); // Default to 10 if limit is not provided
+    )
+    .orderBy(desc(orders.createdAt))
+    .limit(limit || 10); // Default to 10 if limit is not provided
+    
+    return result;
   }
 
-  async getActiveOrdersLightweight(restaurantId: number, limit?: number): Promise<{id: number, orderNumber: string, status: string, total: string, createdAt: Date, customerName?: string, tableNumber?: number}[]> {
+  async getActiveOrdersLightweight(restaurantId: number, limit?: number): Promise<any[]> {
     try {
+      console.log('Storage: getActiveOrdersLightweight called with:', { restaurantId, limit });
+      
       const result = await db.select({
         id: orders.id,
         orderNumber: orders.orderNumber,
+        displayOrderNumber: orders.displayOrderNumber,
         status: orders.status,
         total: orders.total,
         createdAt: orders.createdAt,
@@ -467,15 +440,44 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(orders.createdAt))
       .limit(limit || 10);
 
-      return result.map(row => ({
+      console.log('Storage: Found orders:', result.length);
+
+      // For each order, fetch its items with menu item details
+      const ordersWithItems = await Promise.all(result.map(async (row) => {
+        const items = await db.select({
+          id: orderItems.id,
+          quantity: orderItems.quantity,
+          price: orderItems.price,
+          menuItemId: orderItems.menuItemId,
+          menuItemName: menuItems.name
+        })
+        .from(orderItems)
+        .leftJoin(menuItems, eq(orderItems.menuItemId, menuItems.id))
+        .where(eq(orderItems.orderId, row.id));
+        
+        console.log(`Storage: Order ${row.id} has ${items.length} items`);
+        
+        return {
         id: Number(row.id),
         orderNumber: String(row.orderNumber),
+          displayOrderNumber: row.displayOrderNumber ? Number(row.displayOrderNumber) : undefined,
         status: String(row.status),
         total: String(row.total),
         createdAt: new Date(row.createdAt),
         customerName: row.customerName ? String(row.customerName) : undefined,
-        tableNumber: row.tableNumber ? Number(row.tableNumber) : undefined
+          tableNumber: row.tableNumber ? Number(row.tableNumber) : undefined,
+          items: items.map(item => ({
+            id: Number(item.id),
+            quantity: Number(item.quantity),
+            price: String(item.price),
+            menuItemId: Number(item.menuItemId),
+            menuItemName: String(item.menuItemName)
+          }))
+        };
       }));
+
+      console.log('Storage: Returning orders with items:', ordersWithItems.length);
+      return ordersWithItems;
     } catch (error) {
       console.error('Error in getActiveOrdersLightweight:', error);
       return [];
@@ -520,15 +522,76 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  // Generate a sequential display order number per restaurant
+  private async generateSequentialDisplayOrderNumber(restaurantId: number): Promise<number> {
+    // Get the max displayOrderNumber for this restaurant
+    const result = await db.select({ max: sql<number>`MAX(${orders.displayOrderNumber})` })
+      .from(orders)
+      .where(eq(orders.restaurantId, restaurantId));
+    const maxNumber = result[0]?.max || 0;
+    return maxNumber + 1;
+  }
+
   async createOrder(order: InsertOrder): Promise<Order> {
-    const [newOrder] = await db.insert(orders).values(order).returning();
+    // Validate session and customer exist and are active
+    const session = await this.getTableSession(order.tableSessionId);
+    if (!session) {
+      throw new Error(`Table session ${order.tableSessionId} not found`);
+    }
+    
+    if (!['waiting', 'active'].includes(session.status)) {
+      throw new Error(`Cannot create order for session with status: ${session.status}`);
+    }
+
+    const customer = await this.getCustomer(order.customerId);
+    if (!customer) {
+      throw new Error(`Customer ${order.customerId} not found`);
+    }
+
+    if (customer.tableSessionId !== order.tableSessionId) {
+      throw new Error(`Customer ${order.customerId} does not belong to session ${order.tableSessionId}`);
+    }
+
+    // Generate unique order number
+    const orderNumber = await this.generateUniqueOrderNumber(order.restaurantId);
+    // Generate sequential display order number
+    const displayOrderNumber = await this.generateSequentialDisplayOrderNumber(order.restaurantId);
+
+    const [newOrder] = await db.insert(orders).values({
+      ...order,
+      orderNumber,
+      displayOrderNumber,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }).returning();
     
     // Invalidate session cache when new order is created
     if (newOrder.tableSessionId) {
       await this.invalidateSessionCache(newOrder.tableSessionId);
+      await this.calculateSessionTotals(newOrder.tableSessionId); // Ensure totals are updated
     }
     
     return newOrder;
+  }
+
+  private async generateUniqueOrderNumber(restaurantId: number): Promise<string> {
+    const timestamp = Date.now().toString().slice(-8);
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    const orderNumber = `R${restaurantId}-${timestamp}-${random}`;
+    
+    // Check if order number already exists (very unlikely but safe)
+    const existingOrder = await db
+      .select()
+      .from(orders)
+      .where(eq(orders.orderNumber, orderNumber))
+      .limit(1);
+    
+    if (existingOrder.length > 0) {
+      // Retry with different random number
+      return this.generateUniqueOrderNumber(restaurantId);
+    }
+    
+    return orderNumber;
   }
 
   async updateOrder(id: number, order: Partial<InsertOrder>): Promise<Order | undefined> {
@@ -541,6 +604,7 @@ export class DatabaseStorage implements IStorage {
     // Invalidate session cache when order is updated
     if (updatedOrder?.tableSessionId) {
       await this.invalidateSessionCache(updatedOrder.tableSessionId);
+      await this.calculateSessionTotals(updatedOrder.tableSessionId); // Ensure totals are updated
     }
     
     return updatedOrder;
@@ -551,6 +615,10 @@ export class DatabaseStorage implements IStorage {
       .delete(orders)
       .where(eq(orders.id, id))
       .returning();
+    if (result.length > 0 && result[0]?.tableSessionId) {
+      await this.invalidateSessionCache(result[0].tableSessionId);
+      await this.calculateSessionTotals(result[0].tableSessionId); // Ensure totals are updated
+    }
     return result.length > 0;
   }
 
@@ -560,8 +628,31 @@ export class DatabaseStorage implements IStorage {
     return orderItem;
   }
 
-  async getOrderItemsByOrderId(orderId: number): Promise<OrderItem[]> {
-    return await db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+  async getOrderItemsByOrderId(orderId: number): Promise<any[]> {
+    const result = await db.select({
+      id: orderItems.id,
+      quantity: orderItems.quantity,
+      price: orderItems.price,
+      orderId: orderItems.orderId,
+      menuItemId: orderItems.menuItemId,
+      customizations: orderItems.customizations,
+      createdAt: orderItems.createdAt,
+      updatedAt: orderItems.updatedAt,
+      menuItem: {
+        id: menuItems.id,
+        name: menuItems.name,
+        description: menuItems.description,
+        price: menuItems.price,
+        category: menuItems.category,
+        image: menuItems.image,
+        isAvailable: menuItems.isAvailable
+      }
+    })
+    .from(orderItems)
+    .leftJoin(menuItems, eq(orderItems.menuItemId, menuItems.id))
+    .where(eq(orderItems.orderId, orderId));
+    
+    return result;
   }
 
   async createOrderItem(orderItem: InsertOrderItem): Promise<OrderItem> {
@@ -586,6 +677,15 @@ export class DatabaseStorage implements IStorage {
       .from(orderItems)
       .innerJoin(orders, eq(orderItems.orderId, orders.id))
       .where(eq(orders.restaurantId, restaurantId));
+  }
+
+  async batchCreateOrderItems(orderItemsArray: InsertOrderItem[]): Promise<OrderItem[]> {
+    if (!orderItemsArray || orderItemsArray.length === 0) return [];
+    const inserted = await db
+      .insert(orderItems)
+      .values(orderItemsArray)
+      .returning();
+    return inserted;
   }
 
   // User Methods
@@ -659,6 +759,19 @@ export class DatabaseStorage implements IStorage {
     return newFeedback;
   }
 
+  // Application Feedback Methods
+  async createApplicationFeedback(feedbackItem: InsertApplicationFeedback): Promise<ApplicationFeedback> {
+    const [newFeedback] = await db
+      .insert(applicationFeedback)
+      .values(feedbackItem)
+      .returning();
+    return newFeedback;
+  }
+
+  async getApplicationFeedbackByRestaurantId(restaurantId: number): Promise<ApplicationFeedback[]> {
+    return await db.select().from(applicationFeedback).where(eq(applicationFeedback.restaurantId, restaurantId));
+  }
+
   // Analytics Methods - Optimized for performance
   async getRestaurantRevenue(restaurantId: number, startDate: Date, endDate: Date): Promise<number> {
     try {
@@ -730,12 +843,17 @@ export class DatabaseStorage implements IStorage {
     const { startDate, endDate } = options;
     
     try {
-      const conditions = [eq(menuItems.restaurantId, restaurantId)];
-      if (startDate && endDate) {
-        conditions.push(sql`${orders.createdAt} BETWEEN ${startDate} AND ${endDate}`);
+      console.log('Storage: getPopularMenuItems called with:', { restaurantId, limit, startDate, endDate });
+      
+      // Debug: Check if there are any orders in the database
+      const allOrders = await db.select().from(orders).where(eq(orders.restaurantId, restaurantId));
+      console.log('Storage: Total orders in database for restaurant:', allOrders.length);
+      if (allOrders.length > 0) {
+        console.log('Storage: Sample order dates:', allOrders.slice(0, 3).map(o => ({ id: o.id, createdAt: o.createdAt, status: o.status })));
       }
 
-      const result = await db.select({
+      const conditions = [eq(menuItems.restaurantId, restaurantId)];
+      let query = db.select({
         id: menuItems.id,
         name: menuItems.name,
         price: menuItems.price,
@@ -743,13 +861,32 @@ export class DatabaseStorage implements IStorage {
       })
       .from(menuItems)
       .leftJoin(orderItems, sql`${menuItems.id} = ${orderItems.menuItemId}`)
-      .leftJoin(orders, sql`${orderItems.orderId} = ${orders.id} AND ${orders.status} != 'cancelled'`)
+      .leftJoin(orders, sql`${orderItems.orderId} = ${orders.id} AND ${orders.status} != 'cancelled'`);
+
+      // Add date filtering condition if dates are provided
+      if (startDate && endDate) {
+        console.log('Storage: Applying date filter:', { startDate, endDate });
+        conditions.push(sql`${orders.createdAt} BETWEEN ${startDate.toISOString()} AND ${endDate.toISOString()}`);
+      } else {
+        console.log('Storage: No date filter applied');
+      }
+
+      const result = await query
       .where(and(...conditions as any))
       .groupBy(menuItems.id, menuItems.name, menuItems.price)
       .orderBy(desc(sql`COUNT(${orderItems.id})`))
       .limit(limit);
       
-      return result.map(row => ({
+      console.log('Storage: Query result:', result);
+      
+      // Filter out items with 0 orders when date filtering is applied
+      const filteredResult = startDate && endDate 
+        ? result.filter(row => Number(row.count) > 0)
+        : result;
+      
+      console.log('Storage: Filtered result:', filteredResult);
+      
+      return filteredResult.map(row => ({
         id: Number(row.id),
         name: String(row.name),
         count: Number(row.count || 0),
@@ -765,7 +902,7 @@ export class DatabaseStorage implements IStorage {
   // Stripe-related functionality has been removed and replaced with placeholder subscription management
 
   // AI Insights Implementation
-  async getAiInsightsByRestaurantId(restaurantId: number): Promise<any[]> {
+  async getAiInsightsByRestaurantId(restaurantId: number): Promise<AiInsight[]> {
     try {
       const result = await db.select().from(aiInsights).where(eq(aiInsights.restaurantId, restaurantId));
       return result;
@@ -775,7 +912,7 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async createAiInsight(insight: any): Promise<any> {
+  async createAiInsight(insight: InsertAiInsight): Promise<AiInsight> {
     try {
       const result = await db.insert(aiInsights).values({
         restaurantId: insight.restaurantId,
@@ -796,7 +933,7 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async updateAiInsight(insightId: number, updates: any): Promise<any> {
+  async updateAiInsight(insightId: number, updates: Partial<InsertAiInsight>): Promise<AiInsight> {
     try {
       const result = await db
         .update(aiInsights)
@@ -859,11 +996,95 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createTableSession(session: InsertTableSession): Promise<TableSession> {
-    const [newSession] = await db
+    // Use withTransaction wrapper for consistency and error handling
+    return this.withTransaction(async (tx) => {
+      // Check for existing active session with proper locking
+      const existingSession = await tx
+        .select()
+        .from(tableSessions)
+        .where(
+          and(
+            eq(tableSessions.tableId, session.tableId),
+            eq(tableSessions.restaurantId, session.restaurantId),
+            inArray(tableSessions.status, ['waiting', 'active'])
+          )
+        )
+        .limit(1);
+
+      if (existingSession.length > 0) {
+        // Check if the existing session is truly active (has pending orders or unpaid bills)
+        const sessionId = existingSession[0].id;
+        
+        // Check for pending orders
+        const pendingOrders = await tx
+          .select()
+          .from(orders)
+          .where(
+            and(
+              eq(orders.tableSessionId, sessionId),
+              sql`${orders.status} NOT IN ('completed', 'cancelled')`
+            )
+          )
+          .limit(1);
+
+        // Check for unpaid bills
+        const unpaidBills = await tx
+          .select()
+          .from(bills)
+          .where(
+            and(
+              eq(bills.tableSessionId, sessionId),
+              ne(bills.status, 'paid')
+            )
+          )
+          .limit(1);
+
+        // If there are pending orders or unpaid bills, the session is truly active
+        if (pendingOrders.length > 0 || unpaidBills.length > 0) {
+          // Lookup table number for error message
+          const table = await tx.select().from(tables).where(eq(tables.id, session.tableId)).limit(1);
+          const tableNumber = table[0]?.number ?? session.tableId;
+          throw new Error(`Table ${tableNumber} already has an active session`);
+        } else {
+          // Session exists but has no pending orders or unpaid bills, so force complete it
+          await tx
+            .update(tableSessions)
+            .set({ 
+              status: 'completed',
+              endTime: new Date(),
+              updatedAt: new Date()
+            })
+            .where(eq(tableSessions.id, sessionId));
+          
+          // Update table to not occupied
+          await tx
+            .update(tables)
+            .set({ 
+              isOccupied: false,
+              updatedAt: new Date()
+            })
+            .where(eq(tables.id, session.tableId));
+        }
+      }
+
+      // Create session with optimistic locking
+      const [newSession] = await tx
       .insert(tableSessions)
-      .values(session)
+        .values({
+          ...session,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
       .returning();
+
+      // Update table occupancy status
+      await tx
+        .update(tables)
+        .set({ isOccupied: true, updatedAt: new Date() })
+        .where(eq(tables.id, session.tableId));
+
     return newSession;
+    });
   }
 
   async updateTableSession(id: number, session: Partial<InsertTableSession>): Promise<TableSession | undefined> {
@@ -881,12 +1102,39 @@ export class DatabaseStorage implements IStorage {
       sanitizedSession.startTime = new Date(sanitizedSession.startTime);
     }
 
+    // Validate status transitions
+    if (sanitizedSession.status) {
+      const currentSession = await this.getTableSession(id);
+      if (currentSession) {
+        const validTransitions = this.getValidStatusTransitions(currentSession.status);
+        if (!validTransitions.includes(sanitizedSession.status)) {
+          throw new Error(`Invalid status transition from ${currentSession.status} to ${sanitizedSession.status}`);
+        }
+      }
+    }
+
     const [updatedSession] = await db
       .update(tableSessions)
       .set({ ...sanitizedSession, updatedAt: new Date() })
       .where(eq(tableSessions.id, id))
       .returning();
+
+    // Update table occupancy if session status changed
+    if (updatedSession && sanitizedSession.status) {
+      await this.syncTableOccupancy(updatedSession.restaurantId);
+    }
+
     return updatedSession;
+  }
+
+  private getValidStatusTransitions(currentStatus: string): string[] {
+    const transitions: Record<string, string[]> = {
+      'waiting': ['active', 'cancelled', 'completed'],
+      'active': ['completed', 'cancelled'],
+      'completed': [], // Terminal state
+      'cancelled': []  // Terminal state
+    };
+    return transitions[currentStatus] || [];
   }
   
   // Customer Methods
@@ -900,9 +1148,23 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createCustomer(customer: InsertCustomer): Promise<Customer> {
+    // Validate that the session exists and is active
+    const session = await this.getTableSession(customer.tableSessionId);
+    if (!session) {
+      throw new Error(`Table session ${customer.tableSessionId} not found`);
+    }
+    
+    if (!['waiting', 'active'].includes(session.status)) {
+      throw new Error(`Cannot add customer to session with status: ${session.status}`);
+    }
+
     const [newCustomer] = await db
       .insert(customers)
-      .values(customer)
+      .values({
+        ...customer,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
       .returning();
     return newCustomer;
   }
@@ -942,7 +1204,7 @@ export class DatabaseStorage implements IStorage {
   async getBillsByTableSessionId(tableSessionId: number, limit: number = 30, offset: number = 0): Promise<Bill[]> {
     return await db.select().from(bills)
       .where(eq(bills.tableSessionId, tableSessionId))
-      .orderBy(bills.createdAt, 'desc')
+      .orderBy(desc(bills.createdAt))
       .limit(limit)
       .offset(offset);
   }
@@ -956,73 +1218,394 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createBill(bill: InsertBill): Promise<Bill> {
+    // Validate session exists and is active
+    const session = await this.getTableSession(bill.tableSessionId);
+    if (!session) {
+      throw new Error(`Table session ${bill.tableSessionId} not found`);
+    }
+    
+    if (!['waiting', 'active'].includes(session.status)) {
+      throw new Error(`Cannot create bill for session with status: ${session.status}`);
+    }
+
+    // Validate customer if individual bill
+    if (bill.customerId) {
+      const customer = await this.getCustomer(bill.customerId);
+      if (!customer) {
+        throw new Error(`Customer ${bill.customerId} not found`);
+      }
+      
+      if (customer.tableSessionId !== bill.tableSessionId) {
+        throw new Error(`Customer ${bill.customerId} does not belong to session ${bill.tableSessionId}`);
+      }
+
+      // Check if customer already has a bill for this session
+      const existingBill = await this.getBillByCustomerAndSession(bill.customerId, bill.tableSessionId);
+      if (existingBill) {
+        throw new Error(`Customer ${bill.customerId} already has a bill for session ${bill.tableSessionId}`);
+      }
+    }
+
+    // Generate unique bill number
+    const billNumber = await this.generateUniqueBillNumber(bill.tableSessionId);
+
     const [newBill] = await db
       .insert(bills)
-      .values(bill)
+      .values({
+        ...bill,
+        billNumber,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
       .returning();
+
+    // Invalidate session cache when new bill is created
+    await this.invalidateSessionCache(bill.tableSessionId);
+
     return newBill;
   }
 
+  private async generateUniqueBillNumber(tableSessionId: number): Promise<string> {
+    const timestamp = Date.now().toString().slice(-8);
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    const billNumber = `B${tableSessionId}-${timestamp}-${random}`;
+    
+    // Check if bill number already exists
+    const existingBill = await db
+      .select()
+      .from(bills)
+      .where(eq(bills.billNumber, billNumber))
+      .limit(1);
+    
+    if (existingBill.length > 0) {
+      // Retry with different random number
+      return this.generateUniqueBillNumber(tableSessionId);
+    }
+    
+    return billNumber;
+  }
+
   async updateBill(id: number, bill: Partial<InsertBill>): Promise<Bill | undefined> {
-    const [updatedBill] = await db
+    return this.withTransaction(async (tx) => {
+      const [updatedBill] = await tx
       .update(bills)
       .set({ ...bill, updatedAt: new Date() })
       .where(eq(bills.id, id))
       .returning();
     
+      if (!updatedBill) {
+        return undefined;
+      }
+      
     // Invalidate session cache when bill is updated
     if (updatedBill?.tableSessionId) {
       await this.invalidateSessionCache(updatedBill.tableSessionId);
     }
     
     // If bill status is changed to 'paid', update customer payment status
-    if (bill.status === 'paid' && updatedBill?.customerId) {
-      await this.updateCustomer(updatedBill.customerId, { paymentStatus: 'paid' });
+      if (bill.status === 'paid') {
+        if (updatedBill.customerId) {
+          // For individual bills, mark the specific customer as paid
+          await tx
+            .update(customers)
+            .set({ paymentStatus: 'paid', updatedAt: new Date() })
+            .where(eq(customers.id, updatedBill.customerId));
+        } else {
+          // For combined/partial bills, need to determine which customers it covers
+          try {
+            // Get the bill to check its type
+            const [billDetails] = await tx
+              .select()
+              .from(bills)
+              .where(eq(bills.id, id))
+              .limit(1);
+            
+            if (billDetails?.type === 'combined') {
+              // Combined bill - mark all customers in the session as paid
+              await tx
+                .update(customers)
+                .set({ paymentStatus: 'paid', updatedAt: new Date() })
+                .where(eq(customers.tableSessionId, updatedBill.tableSessionId));
+            } 
+            // For partial bills, we can't determine which customers are covered
+          } catch (error) {
+            console.error(`[Storage] Error updating customer payment status for bill ${id}:`, error);
+          }
+        }
       
       // Check if all customers have paid and update session accordingly
       await this.updateSessionPaymentProgress(updatedBill.tableSessionId);
     }
     
     return updatedBill;
+    });
   }
 
   async checkAllCustomersBillsPaid(tableSessionId: number): Promise<boolean> {
-    // Get all customers in the session
-    const customers = await this.getCustomersByTableSessionId(tableSessionId);
-    
-    // Get all bills for the session
-    const sessionBills = await this.getBillsByTableSessionId(tableSessionId);
-    
-    // Check if every customer has a paid bill
-    for (const customer of customers) {
-      const customerBill = sessionBills.find(bill => bill.customerId === customer.id);
-      if (!customerBill || customerBill.status !== 'paid') {
-        return false;
+    try {
+      // Use a more atomic approach by joining customers and bills in a single query
+      const customersWithBills = await db
+        .select({
+          customerId: customers.id,
+          billId: bills.id,
+          billStatus: bills.status
+        })
+        .from(customers)
+        .leftJoin(
+          bills,
+          and(
+            eq(bills.customerId, customers.id),
+            eq(bills.tableSessionId, customers.tableSessionId)
+          )
+        )
+        .where(eq(customers.tableSessionId, tableSessionId));
+
+      if (customersWithBills.length === 0) {
+        return false; // No customers found
       }
+
+      // Check if all customers have associated paid bills
+      const unpaidCustomers = customersWithBills.filter(
+        row => row.billId === null || row.billStatus !== 'paid'
+      );
+
+      return unpaidCustomers.length === 0;
+    } catch (error) {
+      console.error(`[Storage] Error checking bill payments for session ${tableSessionId}:`, error);
+      return false; // Fail safe by assuming not all bills are paid
     }
-    
-    return customers.length > 0; // At least one customer must exist
+  }
+
+  // Check if a session can be marked as completed
+  async canCompleteSession(tableSessionId: number): Promise<{
+    canComplete: boolean;
+    reason?: string;
+    billsPending?: number;
+    hasOrders?: boolean;
+  }> {
+    try {
+      // Check for orders in this session
+      const sessionOrders = await db
+        .select()
+        .from(orders)
+        .where(eq(orders.tableSessionId, tableSessionId));
+
+      // If no orders, session can be completed immediately (no payments needed)
+      if (!sessionOrders.length) {
+        return { 
+          canComplete: true,
+          hasOrders: false
+        };
+      }
+
+      // Check for bills
+      const sessionBills = await db
+        .select()
+        .from(bills)
+        .where(eq(bills.tableSessionId, tableSessionId));
+
+      // If there are orders but no bills, bills need to be generated first
+      if (sessionOrders.length > 0 && sessionBills.length === 0) {
+        return { 
+          canComplete: false,
+          reason: 'Bills need to be generated first',
+          hasOrders: true
+        };
+      }
+
+      // Check if all bills are paid
+      const unpaidBills = sessionBills.filter(bill => bill.status !== 'paid');
+      
+      return {
+        canComplete: unpaidBills.length === 0,
+        reason: unpaidBills.length > 0 ? 'There are unpaid bills' : undefined,
+        billsPending: unpaidBills.length,
+        hasOrders: true
+      };
+    } catch (error) {
+      console.error(`[Storage] Error checking session completion status for ${tableSessionId}:`, error);
+      return { 
+        canComplete: false,
+        reason: 'Error checking session status'
+      };
+    }
+  }
+
+  // Force complete a session (for abandoned sessions)
+  async forceCompleteSession(tableSessionId: number, reason: string): Promise<void> {
+    return this.withTransaction(async (tx) => {
+      // Mark session as completed
+      await tx
+        .update(tableSessions)
+        .set({ 
+          status: 'completed', 
+          endTime: new Date(),
+          updatedAt: new Date()
+        })
+        .where(eq(tableSessions.id, tableSessionId));
+      
+      // Update any pending bills as cancelled
+      await tx
+        .update(bills)
+        .set({
+          status: 'cancelled',
+          updatedAt: new Date()
+        })
+        .where(
+          and(
+            eq(bills.tableSessionId, tableSessionId),
+            eq(bills.status, 'pending')
+          )
+        );
+      
+      // Log the forced completion
+      console.log(`[Storage] Force completed session ${tableSessionId}: ${reason}`);
+      
+      // Get session to sync table occupancy
+      const [session] = await tx
+        .select()
+        .from(tableSessions)
+        .where(eq(tableSessions.id, tableSessionId))
+        .limit(1);
+        
+      if (session?.restaurantId) {
+        // Table occupancy sync happens outside transaction
+        await this.syncTableOccupancy(session.restaurantId);
+      }
+    });
   }
 
   async updateSessionPaymentProgress(tableSessionId: number): Promise<void> {
-    const allPaid = await this.checkAllCustomersBillsPaid(tableSessionId);
+    await this.withTransaction(async (tx) => {
+      // Check for orders first - if no orders, mark as completed
+      const sessionOrders = await tx
+        .select()
+        .from(orders)
+        .where(eq(orders.tableSessionId, tableSessionId));
+      
+      if (sessionOrders.length === 0) {
+        // No orders, so session can be marked as completed immediately
+        await tx
+          .update(tableSessions)
+          .set({ 
+            status: 'completed', 
+            endTime: new Date(),
+            updatedAt: new Date()
+          })
+          .where(eq(tableSessions.id, tableSessionId));
+        
+        // Get session to sync table occupancy
+        const [session] = await tx
+          .select()
+          .from(tableSessions)
+          .where(eq(tableSessions.id, tableSessionId))
+          .limit(1);
+          
+        if (session?.restaurantId) {
+          await this.syncTableOccupancy(session.restaurantId);
+        }
+        return;
+      }
+      
+      // Check if there is a combined bill for the session that is paid
+      const sessionBills = await tx
+        .select()
+        .from(bills)
+        .where(eq(bills.tableSessionId, tableSessionId));
+      
+      // If no bills yet but there are orders, don't complete the session
+      if (sessionBills.length === 0 && sessionOrders.length > 0) {
+        return;
+      }
+      
+      // Count bills by type and status
+      const combinedBills = sessionBills.filter((bill: any) => bill.type === 'combined');
+      const combinedBillPaid = combinedBills.some((bill: any) => bill.status === 'paid');
+      
+      // If there's a paid combined bill, mark session as completed immediately
+      if (combinedBillPaid) {
+        await tx
+          .update(tableSessions)
+          .set({ 
+            status: 'completed', 
+            endTime: new Date(),
+            updatedAt: new Date()
+          })
+          .where(eq(tableSessions.id, tableSessionId));
+        
+        // Get session to sync table occupancy
+        const [session] = await tx
+          .select()
+          .from(tableSessions)
+          .where(eq(tableSessions.id, tableSessionId))
+          .limit(1);
+          
+        if (session?.restaurantId) {
+          // Table occupancy sync happens outside transaction because it's a separate concern
+          await this.syncTableOccupancy(session.restaurantId);
+        }
+        return;
+      }
+      
+      // Otherwise, check if all individual customer bills are paid using an atomic approach
+      const customersWithBills = await tx
+        .select({
+          customerId: customers.id,
+          billId: bills.id,
+          billStatus: bills.status
+        })
+        .from(customers)
+        .leftJoin(
+          bills,
+          and(
+            eq(bills.customerId, customers.id),
+            eq(bills.tableSessionId, customers.tableSessionId)
+          )
+        )
+        .where(eq(customers.tableSessionId, tableSessionId));
+
+      if (customersWithBills.length === 0) {
+        // No customers in the session - this is an edge case
+        // We already know there are orders, which means this is an inconsistent state
+        // Don't complete the session automatically
+        return;
+      }
+
+      // Check if all customers have associated paid bills
+      const unpaidCustomers = customersWithBills.filter(
+        (row: { customerId: number, billId: number | null, billStatus: string | null }) => 
+          row.billId === null || row.billStatus !== 'paid'
+      );
+      
+      const allPaid = unpaidCustomers.length === 0;
     
     if (allPaid) {
       // Mark session as completed and set end time
-      await this.updateTableSession(tableSessionId, {
+        await tx
+          .update(tableSessions)
+          .set({ 
         status: 'completed',
-        endTime: new Date()
-      });
+            endTime: new Date(),
+            updatedAt: new Date()
+          })
+          .where(eq(tableSessions.id, tableSessionId));
       
       // Get session to sync table occupancy for the restaurant
-      const session = await this.getTableSession(tableSessionId);
+        const [session] = await tx
+          .select()
+          .from(tableSessions)
+          .where(eq(tableSessions.id, tableSessionId))
+          .limit(1);
+          
       if (session?.restaurantId) {
+          // Table occupancy sync happens outside transaction because it's a separate concern
         await this.syncTableOccupancy(session.restaurantId);
       }
     } else {
       // Calculate session totals from actual orders and bills
       await this.calculateSessionTotals(tableSessionId);
     }
+    });
   }
 
   // Cache for session totals to avoid recalculating frequently
@@ -1039,34 +1622,53 @@ export class DatabaseStorage implements IStorage {
       return;
     }
 
+    // Use transaction for consistency
+    await this.withTransaction(async (tx) => {
+      try {
     // Get all orders for this session with a single optimized query
-    const sessionOrders = await db
+        const sessionOrders = await tx
       .select()
       .from(orders)
       .where(eq(orders.tableSessionId, tableSessionId));
     
     // Calculate total from orders
-    const orderTotal = sessionOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
+    const orderTotal = sessionOrders.reduce((sum: number, order: { total: string }) => sum + parseFloat(order.total), 0);
     
     // Get bills for payment calculation with single query
-    const sessionBills = await this.getBillsByTableSessionId(tableSessionId);
+        const sessionBills = await tx
+          .select()
+          .from(bills)
+          .where(eq(bills.tableSessionId, tableSessionId));
     
     const paidAmount = sessionBills
-      .filter(bill => bill.status === 'paid')
-      .reduce((sum, bill) => sum + parseFloat(bill.total), 0);
+          .filter((bill: any) => bill.status === 'paid')
+      .reduce((sum: number, bill: { total: string }) => sum + parseFloat(bill.total), 0);
     
     const totals = {
       totalAmount: orderTotal.toString(),
       paidAmount: paidAmount.toString()
     };
 
+        // Get current session to check if totals changed
+        const [currentSession] = await tx
+          .select()
+          .from(tableSessions)
+          .where(eq(tableSessions.id, tableSessionId))
+          .limit(1);
+
     // Update session with accurate totals only if changed
-    const currentSession = await this.getTableSession(tableSessionId);
     if (!currentSession || 
         currentSession.totalAmount !== totals.totalAmount || 
         currentSession.paidAmount !== totals.paidAmount) {
       
-      await this.updateTableSession(tableSessionId, totals);
+          await tx
+            .update(tableSessions)
+            .set({ 
+              ...totals,
+              updatedAt: new Date() 
+            })
+            .where(eq(tableSessions.id, tableSessionId));
+          
       console.log(`[Storage] Updated session ${tableSessionId} totals: ${totals.totalAmount} total, ${totals.paidAmount} paid`);
     }
 
@@ -1074,6 +1676,11 @@ export class DatabaseStorage implements IStorage {
     this.sessionTotalsCache.set(tableSessionId, {
       totals,
       lastUpdated: now
+        });
+      } catch (error) {
+        console.error(`[Storage] Error calculating session totals for session ${tableSessionId}:`, error);
+        // Don't rethrow to prevent blocking other operations
+      }
     });
   }
 
@@ -1084,34 +1691,180 @@ export class DatabaseStorage implements IStorage {
   }
 
   async syncTableOccupancy(restaurantId: number): Promise<void> {
-    // Get all tables for this restaurant
-    const restaurantTables = await db
+    // Improved table occupancy sync with better error handling
+    try {
+      // Get all tables for the restaurant
+      const allTables = await db
       .select()
       .from(tables)
       .where(eq(tables.restaurantId, restaurantId));
 
-    // Get all active sessions for this restaurant
-    const activeSessions = await this.getTableSessionsByRestaurantId(restaurantId, 'active');
-    const occupiedTableIds = new Set(activeSessions.map(session => session.tableId));
-
-    // Update each table's occupancy status
-    for (const table of restaurantTables) {
-      const shouldBeOccupied = occupiedTableIds.has(table.id);
-      
-      if (table.isOccupied !== shouldBeOccupied) {
-        await this.updateTable(table.id, { isOccupied: shouldBeOccupied });
+      if (!allTables.length) {
+        console.log(`[Storage] No tables found for restaurant ${restaurantId} to sync`);
+        return;
       }
+      
+      // For each table, check if it has any active sessions
+      for (const table of allTables) {
+        try {
+          const activeSessions = await db
+            .select()
+            .from(tableSessions)
+            .where(
+              and(
+                eq(tableSessions.tableId, table.id),
+                eq(tableSessions.restaurantId, restaurantId),
+                inArray(tableSessions.status, ['active', 'waiting'])
+              )
+            );
+          
+          const isOccupied = activeSessions.length > 0;
+          
+          // Only update if the status has changed
+          if (table.isOccupied !== isOccupied) {
+            await db
+              .update(tables)
+              .set({ 
+                isOccupied, 
+                updatedAt: new Date() 
+              })
+              .where(eq(tables.id, table.id));
+            
+            console.log(`[Storage] Updated table ${table.number} occupied status to ${isOccupied}`);
+          }
+        } catch (error) {
+          console.error(`[Storage] Error updating table ${table.id} status:`, error);
+          // Continue with other tables even if one fails
+        }
+      }
+    } catch (error) {
+      console.error(`[Storage] Error syncing table occupancy for restaurant ${restaurantId}:`, error);
     }
+  }
+
+  async getOrdersByCustomerId(customerId: number): Promise<Order[]> {
+    return await db.select().from(orders).where(eq(orders.customerId, customerId));
   }
 
   async getOrdersByTableSessionId(tableSessionId: number): Promise<Order[]> {
     return await db.select().from(orders).where(eq(orders.tableSessionId, tableSessionId));
   }
 
+  async cleanupEmptySessions(timeoutMinutes: number = 30): Promise<{ removedSessions: number, removedCustomers: number }> {
+    const now = new Date();
+    const cutoffTime = new Date(now.getTime() - timeoutMinutes * 60000);
+    
+    let removedSessions = 0;
+    let removedCustomers = 0;
+
+    try {
+      // Get all sessions that are older than the timeout and are in waiting/active status
+      const oldSessions = await db
+        .select()
+        .from(tableSessions)
+        .where(
+          and(
+            inArray(tableSessions.status, ['waiting', 'active']),
+            lt(tableSessions.createdAt, cutoffTime)
+          )
+        );
+
+      if (oldSessions.length === 0) {
+        return { removedSessions: 0, removedCustomers: 0 };
+      }
+
+      const sessionIds = oldSessions.map(s => s.id);
+
+      // Get all orders for these sessions in one query
+      const sessionOrders = await db
+        .select({ tableSessionId: orders.tableSessionId })
+        .from(orders)
+        .where(inArray(orders.tableSessionId, sessionIds));
+
+      // Create a set of session IDs that have orders
+      const sessionsWithOrders = new Set(sessionOrders.map(o => o.tableSessionId));
+
+      // Separate sessions into those with orders and those without
+      const sessionsToDelete = oldSessions.filter(s => !sessionsWithOrders.has(s.id));
+      const sessionsToClean = oldSessions.filter(s => sessionsWithOrders.has(s.id));
+
+      // Delete sessions that have no orders (and their customers)
+      if (sessionsToDelete.length > 0) {
+        const sessionsToDeleteIds = sessionsToDelete.map(s => s.id);
+        
+        // Delete customers for these sessions
+        const deletedCustomers = await db
+          .delete(customers)
+          .where(inArray(customers.tableSessionId, sessionsToDeleteIds))
+          .returning();
+        
+        removedCustomers += deletedCustomers.length;
+
+        // Delete the sessions
+        await db
+          .delete(tableSessions)
+          .where(inArray(tableSessions.id, sessionsToDeleteIds));
+        
+        removedSessions += sessionsToDeleteIds.length;
+      }
+
+      // For sessions with orders, remove ghost customers (customers with no orders)
+      if (sessionsToClean.length > 0) {
+        const sessionsToCleanIds = sessionsToClean.map(s => s.id);
+        
+        // Get all customers for these sessions
+        const sessionCustomers = await db
+          .select()
+          .from(customers)
+          .where(inArray(customers.tableSessionId, sessionsToCleanIds));
+
+        if (sessionCustomers.length > 0) {
+          const customerIds = sessionCustomers.map(c => c.id);
+          
+          // Get all orders for these customers
+          const customerOrders = await db
+            .select({ customerId: orders.customerId })
+            .from(orders)
+            .where(inArray(orders.customerId, customerIds));
+
+          // Create a set of customer IDs that have orders
+          const customersWithOrders = new Set(customerOrders.map(o => o.customerId));
+
+          // Find customers without orders
+          const ghostCustomerIds = customerIds.filter(id => !customersWithOrders.has(id));
+
+          if (ghostCustomerIds.length > 0) {
+            // Delete ghost customers
+            await db
+              .delete(customers)
+              .where(inArray(customers.id, ghostCustomerIds));
+            
+            removedCustomers += ghostCustomerIds.length;
+          }
+        }
+      }
+
+      return { removedSessions, removedCustomers };
+    } catch (error) {
+      console.error('[Storage] Error during session cleanup:', error);
+      return { removedSessions: 0, removedCustomers: 0 };
+    }
+  }
+
   // Mock menu items for test restaurant
   async getMenuItems(restaurantId: number): Promise<MenuItem[]> {
     // Fetch menu items from the database for the given restaurant
     return await db.select().from(menuItems).where(eq(menuItems.restaurantId, restaurantId));
+  }
+
+  // Fetch menu items by array of IDs
+  async getMenuItemsByIds(menuItemIds: number[]): Promise<MenuItem[]> {
+    if (!menuItemIds.length) return [];
+    
+    return db
+      .select()
+      .from(menuItems)
+      .where(inArray(menuItems.id, menuItemIds));
   }
 
   // Log or update a chat session for a restaurant
