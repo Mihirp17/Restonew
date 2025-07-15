@@ -86,12 +86,17 @@ export default function CustomerEntry() {
         }
       }
       // Create new session
+      const parsedTableNumber = Number(tableNumber);
+      if (!parsedTableNumber || isNaN(parsedTableNumber)) {
+        toast({ title: "Error", description: "Invalid table number.", variant: "destructive" });
+        setIsSubmitting(false);
+        return;
+      }
       const sessionResponse = await fetch(`/api/public/restaurants/${restaurantId}/table-sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          tableId: parseInt(tableNumber!),
-          tableNumber: tableNumber,
+          tableNumber: parsedTableNumber,
           partySize: 1,
           status: "waiting",
         }),

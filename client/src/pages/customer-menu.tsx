@@ -18,15 +18,13 @@ import type { MenuItem } from "@shared/schema";
 export default function CustomerMenu() {
   const params = useParams();
   const [, navigate] = useLocation();
-  const { 
-    restaurantId, 
-    tableNumber, 
-    restaurant, 
-    session, 
+  const {
+    restaurantId,
+    tableNumber,
+    session,
     customer,
-    setRestaurantId, 
+    setRestaurantId,
     setTableNumber,
-    isLoading: restaurantLoading,
     isHydrating
   } = useRestaurant();
   
@@ -64,6 +62,14 @@ export default function CustomerMenu() {
       navigate(`/menu/${params.restaurantId}/${params.tableId}/entry`);
     }
   }, [isHydrating, customer, session, params, navigate]);
+
+  // Fetch restaurant info using the public endpoint
+  const { data: restaurantResponse, isLoading: restaurantLoading } = useQuery({
+    queryKey: [`/api/public/restaurants/${restaurantId}`],
+    enabled: !!restaurantId,
+  });
+  // Use the public restaurant data
+  const restaurant = restaurantResponse as any;
 
   const { data: menuResponse, isLoading: menuLoading } = useQuery({
     queryKey: [`/api/public/restaurants/${restaurantId}/menu-items`],

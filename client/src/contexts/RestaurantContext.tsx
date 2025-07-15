@@ -13,7 +13,6 @@ interface RestaurantContextType {
   setSession: (session: TableSession) => void;
   setCustomer: (customer: Customer) => void;
   isLoading: boolean;
-  isHydrating: boolean;
 }
 
 const RestaurantContext = createContext<RestaurantContextType | undefined>(undefined);
@@ -38,54 +37,10 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
     return saved ? JSON.parse(saved) : null;
   });
 
-  const [isHydrating, setIsHydrating] = useState(true);
-
   const { data: restaurant, isLoading } = useQuery({
-    queryKey: [`/api/public/restaurants/${restaurantId}`],
-    queryFn: async () => {
-      if (!restaurantId) return null;
-      const res = await fetch(`/api/public/restaurants/${restaurantId}`);
-      if (!res.ok) throw new Error('Failed to fetch restaurant');
-      return res.json();
-    },
+    queryKey: ["/api/public/restaurants", restaurantId],
     enabled: !!restaurantId,
   });
-
-  // Hydration effect
-  useEffect(() => {
-    setIsHydrating(false);
-  }, []);
-
-  // Validate session and customer with backend on mount
-  useEffect(() => {
-    async function validateSessionAndCustomer() {
-      if (session && session.id) {
-        try {
-          const res = await fetch(`/api/public/restaurants/${restaurantId}/table-sessions/${session.id}`);
-          if (!res.ok) throw new Error();
-          const sessionData = await res.json();
-          setSession(sessionData);
-        } catch {
-          setSession(null);
-          localStorage.removeItem("tableSession");
-        }
-      }
-      if (customer && customer.id) {
-        try {
-          const res = await fetch(`/api/public/restaurants/${restaurantId}/customers/${customer.id}`);
-          if (!res.ok) throw new Error();
-          const customerData = await res.json();
-          setCustomer(customerData);
-        } catch {
-          setCustomer(null);
-          localStorage.removeItem("customer");
-        }
-      }
-    }
-    validateSessionAndCustomer();
-    // Only run on mount
-    // eslint-disable-next-line
-  }, []);
 
   useEffect(() => {
     if (restaurantId) {
@@ -140,7 +95,7 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
       value={{
         restaurantId,
         tableNumber,
-        restaurant: (restaurant as Restaurant) || null,
+        restaurant: restaurant || null,
         session,
         customer,
         setRestaurantId: handleSetRestaurantId,
@@ -148,7 +103,6 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
         setSession: handleSetSession,
         setCustomer: handleSetCustomer,
         isLoading,
-        isHydrating,
       }}
     >
       {children}
