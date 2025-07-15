@@ -25,6 +25,8 @@ import AdminSubscriptions from "@/pages/admin-subscriptions";
 import AdminSettings from "@/pages/admin-settings";
 import CustomerMenu from "@/pages/customer-menu";
 import Landing from "@/pages/landing";
+import SupportPage from "@/pages/support";
+import CustomerEntry from "@/pages/customer-entry";
 
 function Router() {
   return (
@@ -41,6 +43,7 @@ function Router() {
       <Route path="/analytics" component={Analytics} />
       <Route path="/settings" component={Settings} />
       <Route path="/subscription" component={Subscription} />
+      <Route path="/support" component={SupportPage} />
       
       {/* Admin Routes */}
       <Route path="/admin" component={AdminDashboard} />
@@ -49,6 +52,7 @@ function Router() {
       <Route path="/admin/settings" component={AdminSettings} />
       
       {/* Customer-facing Routes */}
+      <Route path="/menu/:restaurantId/:tableId/entry" component={CustomerEntry} />
       <Route path="/menu/:restaurantId/:tableId" component={CustomerMenu} />
       
       {/* Default Route */}

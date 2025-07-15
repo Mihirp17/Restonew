@@ -153,28 +153,28 @@ const OrderCard = memo(({
 OrderCard.displayName = 'OrderCard';
 
 export const LiveOrders = memo(({ restaurantId }: LiveOrdersProps) => {
-  const { activeOrders, updateOrderStatus, isLoading } = useOrders(restaurantId || 0, { 
+  const ordersResult = useOrders(restaurantId || 0, { 
     lightweight: true, 
     limit: 10 
-  }) as { activeOrders: OrderType[]; updateOrderStatus: (args: { orderId: number; status: OrderType['status'] }) => Promise<void>; isLoading: boolean };
+  });
+  
+  // Extract and transform data with proper typing
+  const activeOrders = ordersResult.activeOrders as unknown as OrderType[];
+  
+  const { isLoading } = ordersResult;
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { t } = useLang();
 
-  // Memoize order count calculation
-  const orderCount = useMemo(() => activeOrders?.length || 0, [activeOrders?.length]);
-
-  // Handle order status update
-  const handleUpdateStatus = useCallback(async (
-    orderId: number,
-    status: OrderType['status']
-  ) => {
+  // Create a properly typed wrapper for updateOrderStatus
+  const updateOrderStatus = async ({ orderId, status }: { orderId: number; status: OrderType['status'] }) => {
+    return ordersResult.updateOrderStatus({ orderId, status });
+  };
+  
+  // Create a handler that matches the OrderCard component's expected signature
+  const handleUpdateStatus = useCallback(async (orderId: number, status: string) => {
     try {
-      await updateOrderStatus({ orderId, status });
-      
-      // NOTE: Removed automatic table status update on order completion
-      // Tables should only be marked as vacant when all bills are paid,
-      // which is handled by the billing system automatically
+      await ordersResult.updateOrderStatus({ orderId, status: status as OrderType['status'] });
       
       toast({
         title: t("success", "Success"),
@@ -189,7 +189,10 @@ export const LiveOrders = memo(({ restaurantId }: LiveOrdersProps) => {
         variant: "destructive",
       });
     }
-  }, [updateOrderStatus, toast, t]);
+  }, [ordersResult, toast, t]);
+
+  // Memoize order count calculation
+  const orderCount = useMemo(() => activeOrders?.length || 0, [activeOrders?.length]);
 
   if (isLoading) {
     return (

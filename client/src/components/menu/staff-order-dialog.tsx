@@ -252,20 +252,15 @@ export function StaffOrderDialog({
 
           // Place the order (type-safe)
           await createOrder({
-            customerId,
-            tableSessionId: tableSession.id,
             tableId: selectedTableId,
             restaurantId,
-            orderNumber,
+            customerName: getCustomerName(customerId),
             status: "pending",
             total: orderTotal.toFixed(2),
-            notes: orderNotes,
-            isGroupOrder: false,
             items: items.map(item => ({
               menuItemId: item.id,
               quantity: item.quantity,
-              price: item.price,
-              customizations: item.customizations || undefined
+              price: item.price
             }))
           });
         }
@@ -274,8 +269,12 @@ export function StaffOrderDialog({
         // Fix TypeScript issue with totalAmount property
         if (typeof tableSession.totalAmount === 'string' || typeof tableSession.totalAmount === 'number') {
           const currentTotal = parseFloat(tableSession.totalAmount?.toString() || '0');
-          await apiRequest('PUT', `/api/restaurants/${restaurantId}/table-sessions/${tableSession.id}`, {
+          await apiRequest({
+            method: 'PUT',
+            url: `/api/restaurants/${restaurantId}/table-sessions/${tableSession.id}`,
+            data: {
             totalAmount: (currentTotal + cartTotal).toString()
+            }
           });
         }
       } else {

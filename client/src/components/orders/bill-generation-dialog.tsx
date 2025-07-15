@@ -167,6 +167,14 @@ export function BillGenerationDialog({
         } else if (sessionData.splitType === 'combined') {
           setSelectedCustomers(customersWithOrders.map((c: Customer) => c.id));
         }
+
+        // When selecting customers in custom mode, don't select ones with existing bills
+        if (sessionData.splitType === 'custom') {
+          const eligibleCustomers = customersWithBillStatus
+            .filter(c => !c.hasExistingBill)
+            .map(c => c.id);
+          setSelectedCustomers(eligibleCustomers);
+        }
       } catch (error) {
         // Detect 404
         if (error?.response?.status === 404) {
@@ -225,6 +233,20 @@ export function BillGenerationDialog({
       });
       return;
     }
+    
+    // Check if there are any orders at all
+    const customersWithOrders = tableSession.customers.filter(customer => 
+      customer.orders?.length > 0 && customer.totalAmount > 0
+    );
+    
+    if (customersWithOrders.length === 0) {
+      toast({
+        title: "No Orders", 
+        description: "Cannot generate bills because there are no orders for this session",
+        variant: "destructive"
+      });
+      return;
+    }
 
     try {
       setIsGenerating(true);
@@ -235,8 +257,13 @@ export function BillGenerationDialog({
         let skipCount = 0;
         
         for (const customer of tableSession.customers) {
-          if (customer.totalAmount > 0) {
-            const total = customer.totalAmount;
+          // Skip customers with no orders or zero total
+          if (customer.totalAmount <= 0 || !customer.orders?.length) {
+            console.log(`Skipping bill for ${customer.name} - no orders`);
+            continue;
+          }
+
+          const total = customer.totalAmount;
 
             const billData = {
               billNumber: generateBillNumber(),
@@ -268,7 +295,6 @@ export function BillGenerationDialog({
               }
             }
           }
-        }
 
         if (successCount > 0 && skipCount > 0) {
           toast({
@@ -375,6 +401,18 @@ export function BillGenerationDialog({
   };
 
   const handleCustomerToggle = (customerId: number) => {
+    // Find the customer to check if they already have a bill
+    const customer = tableSession?.customers?.find(c => c.id === customerId);
+    
+    if (customer?.hasExistingBill) {
+      toast({
+        title: "Cannot Add Customer",
+        description: `${customer.name} already has a bill for this session.`,
+        variant: "destructive"
+      });
+      return;
+    }
+    
     setSelectedCustomers(prev => 
       prev.includes(customerId)
         ? prev.filter(id => id !== customerId)

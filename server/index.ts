@@ -8,6 +8,39 @@ import rateLimit from 'express-rate-limit';
 import cors from 'cors';
 import cron from 'node-cron';
 import { storage } from './storage';
+import { errorMiddleware } from './lib/error-handler';
+
+// Process monitoring to detect event loop blocking
+// let lastCheck = Date.now();
+// const BLOCK_THRESHOLD = 100; // 100ms threshold for considering the event loop blocked
+
+// Performance monitoring
+let performanceStats = {
+  totalCleanupRuns: 0,
+  totalCleanupTime: 0,
+  averageCleanupTime: 0,
+  maxCleanupTime: 0,
+  lastCleanupTime: 0
+};
+
+// setInterval(() => {
+//   const now = Date.now();
+//   const timeSinceLastCheck = now - lastCheck;
+  
+//   // If more than 100ms have passed, the event loop might be blocked
+//   if (timeSinceLastCheck > BLOCK_THRESHOLD) {
+//     console.warn(`[MONITOR] Event loop may be blocked: ${timeSinceLastCheck}ms since last check (threshold: ${BLOCK_THRESHOLD}ms)`);
+//   }
+  
+//   lastCheck = now;
+// }, 50);
+
+// Log performance stats every hour
+setInterval(() => {
+  if (performanceStats.totalCleanupRuns > 0) {
+    console.log(`[PERFORMANCE] Cleanup stats: runs=${performanceStats.totalCleanupRuns}, avg=${performanceStats.averageCleanupTime.toFixed(2)}ms, max=${performanceStats.maxCleanupTime}ms, last=${performanceStats.lastCleanupTime}ms`);
+  }
+}, 3600000); // Every hour
 
 // Debug logs to check environment variables
 console.log("Starting server initialization...");
@@ -143,7 +176,11 @@ app.use('/api/', validateRequest);
     const server = await registerRoutes(app);
     console.log("Routes registered successfully");
 
-    // Error handling middleware
+    // Use the centralized error handling middleware
+    app.use(errorMiddleware);
+
+    // Old error handling middleware - comment out or remove
+    /*
     app.use((err: Error & { status?: number; statusCode?: number }, _req: Request, res: Response, _next: NextFunction) => {
       const status = err.status || err.statusCode || 500;
       const message = err.message || "Internal Server Error";
@@ -164,6 +201,7 @@ app.use('/api/', validateRequest);
       });
       log(`Error: ${message}`);
     });
+    */
 
     // Setup Vite in development mode
     if (process.env.NODE_ENV === "development") {
@@ -176,15 +214,46 @@ app.use('/api/', validateRequest);
       console.log("Static file serving setup completed");
     }
 
-    // Schedule session cleanup every 30 minutes
-    cron.schedule('*/30 * * * *', async () => {
+    // Schedule session cleanup every 30 minutes with improved error handling
+    const cleanupJob = cron.schedule('*/30 * * * *', async () => {
+      console.log('[CRON] Starting session cleanup job...');
+      const startTime = Date.now();
+      
       try {
-        const result = await storage.cleanupEmptySessions(30);
-        console.log(`[CRON] Session cleanup ran: removedSessions=${result.removedSessions}, removedCustomers=${result.removedCustomers}`);
+        // Add a timeout to prevent the job from running too long
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Cleanup job timeout')), 60000); // 1 minute timeout
+        });
+        
+        const cleanupPromise = storage.cleanupEmptySessions(30);
+        
+        const result = await Promise.race([cleanupPromise, timeoutPromise]) as { removedSessions: number, removedCustomers: number };
+        
+        const duration = Date.now() - startTime;
+        
+        // Update performance stats
+        performanceStats.totalCleanupRuns++;
+        performanceStats.totalCleanupTime += duration;
+        performanceStats.averageCleanupTime = performanceStats.totalCleanupTime / performanceStats.totalCleanupRuns;
+        performanceStats.maxCleanupTime = Math.max(performanceStats.maxCleanupTime, duration);
+        performanceStats.lastCleanupTime = duration;
+        
+        console.log(`[CRON] Session cleanup completed in ${duration}ms: removedSessions=${result.removedSessions}, removedCustomers=${result.removedCustomers}`);
       } catch (error) {
-        console.error('[CRON] Error during session cleanup:', error);
+        const duration = Date.now() - startTime;
+        console.error(`[CRON] Error during session cleanup after ${duration}ms:`, error);
+        
+        // Don't let the error crash the cron job
+        if (error instanceof Error && error.message === 'Cleanup job timeout') {
+          console.error('[CRON] Cleanup job timed out - this may indicate a database performance issue');
       }
+      }
+    }, {
+      timezone: "UTC" // Use UTC to avoid timezone issues
     });
+
+    // Log when the cron job is scheduled
+    console.log('[CRON] Session cleanup job scheduled to run every 30 minutes');
 
     const port = Number(process.env.PORT) || 3000;
     const host = process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1';

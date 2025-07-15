@@ -702,12 +702,31 @@ export default function Tables() {
 
   const refreshSessions = async () => {
     // Your logic to reload sessions from the backend
-    await fetchTableSessions();
+    const fetchSessions = async () => {
+      if (!restaurantId) return;
+      
+      try {
+        const sessions = await apiRequest({
+          method: 'GET',
+          url: `/api/restaurants/${restaurantId}/table-sessions`
+        });
+        // Filter to show active AND waiting sessions in the UI
+        const activeAndWaitingSessions = sessions.filter((session: TableSession) => 
+          session.status === 'active' || session.status === 'waiting'
+        );
+        setTableSessions(activeAndWaitingSessions || []);
+      } catch (error) {
+        console.error('Error fetching table sessions:', error);
+      }
+    };
+    
+    await fetchSessions();
   };
+
   useEffect(() => {
     (window as any).refreshSessions = refreshSessions;
     return () => { (window as any).refreshSessions = undefined; };
-  }, []);
+  }, [restaurantId]);
 
   return (
     <Layout
@@ -718,7 +737,7 @@ export default function Tables() {
     >
       <div className="space-y-6">
         {/* Tabs */}
-        <Tabs value={activeTab} onValueChange={(value: string) => setActiveTab(value)}>
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "tables" | "sessions" | "bills")}>
           <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="tables" className="flex items-center space-x-2">
               <TableIcon className="h-4 w-4" />

@@ -54,14 +54,17 @@ export function Layout({
     return null;
   }
 
+  // Extract the last segment of the path for active tab highlighting
+  const activeTab = location.split("/").filter(Boolean).pop() || "dashboard";
+
   // Main layout
   return (
     <div className="flex h-screen overflow-hidden bg-[#ffffff]">
       {/* Sidebar (desktop only) */}
-      <Sidebar active={location} />
+      <Sidebar active={activeTab} />
 
       {/* Mobile Menu */}
-      <MobileMenu active={location} />
+      <MobileMenu active={activeTab} />
 
       {/* Main Content */}
       <div className="flex flex-col flex-1 overflow-hidden">

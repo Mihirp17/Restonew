@@ -11,10 +11,11 @@ import {
   type AiInsight, type InsertAiInsight, aiInsights,
   type TableSession, type InsertTableSession, tableSessions,
   type Customer, type InsertCustomer, customers,
-  type Bill, type InsertBill, bills
+  type Bill, type InsertBill, bills,
+  type ApplicationFeedback, type InsertApplicationFeedback, applicationFeedback
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, sql, inArray, innerJoin } from "drizzle-orm";
+import { eq, and, desc, sql, inArray, lt } from "drizzle-orm";
 import bcrypt from 'bcryptjs';
 
 // Generic storage interface with all required methods
@@ -84,6 +85,10 @@ export interface IStorage {
   getFeedbackByRestaurantId(restaurantId: number, options?: { startDate?: Date, endDate?: Date }): Promise<Feedback[]>;
   createFeedback(feedback: InsertFeedback): Promise<Feedback>;
 
+  // Application Feedback Methods
+  createApplicationFeedback(feedbackItem: InsertApplicationFeedback): Promise<ApplicationFeedback>;
+  getApplicationFeedbackByRestaurantId(restaurantId: number): Promise<ApplicationFeedback[]>;
+
   // Analytics Methods
   getRestaurantRevenue(restaurantId: number, startDate: Date, endDate: Date): Promise<number>;
   getOrderCountByRestaurantId(restaurantId: number, startDate: Date, endDate: Date): Promise<number>;
@@ -94,9 +99,9 @@ export interface IStorage {
   // updateRestaurantStripeInfo removed - placeholder implementation
   
   // AI Insights methods
-  getAiInsightsByRestaurantId(restaurantId: number): Promise<AIInsight[]>;
-  createAiInsight(insight: InsertAIInsight): Promise<AIInsight>;
-  updateAiInsight(insightId: number, updates: Partial<InsertAIInsight>): Promise<AIInsight>;
+  getAiInsightsByRestaurantId(restaurantId: number): Promise<AiInsight[]>;
+  createAiInsight(insight: InsertAiInsight): Promise<AiInsight>;
+  updateAiInsight(insightId: number, updates: Partial<InsertAiInsight>): Promise<AiInsight>;
   markAiInsightAsRead(insightId: number): Promise<void>;
   updateAiInsightStatus(insightId: number, status: string): Promise<void>;
 
@@ -128,6 +133,7 @@ export interface IStorage {
 
   // Mock menu items for test restaurant
   getMenuItems(restaurantId: number): Promise<MenuItem[]>;
+  getMenuItemsByIds(menuItemIds: number[]): Promise<MenuItem[]>;
 
   // Log or update a chat session for a restaurant
   logAiChatSession(params: { restaurantId: number, userId?: number, sessionId?: string }): Promise<number | undefined>;
@@ -136,101 +142,19 @@ export interface IStorage {
   countAiChatSessionsLast24h(restaurantId: number): Promise<number>;
 }
 
-// Mock menu items for test restaurant
-const mockMenuItems = [
-  {
-    id: 1,
-    name: "Classic Margherita",
-    description: "Fresh tomatoes, mozzarella, basil, and olive oil",
-    price: "12.99",
-    category: "Pizza",
-    isAvailable: true,
-    image: null
-  },
-  {
-    id: 2,
-    name: "Pepperoni Feast",
-    description: "Loaded with pepperoni and extra cheese",
-    price: "14.99",
-    category: "Pizza",
-    isAvailable: true,
-    image: null
-  },
-  {
-    id: 3,
-    name: "Garlic Bread",
-    description: "Toasted bread with garlic butter and herbs",
-    price: "5.99",
-    category: "Starters",
-    isAvailable: true,
-    image: null
-  },
-  {
-    id: 4,
-    name: "Caesar Salad",
-    description: "Fresh romaine lettuce, croutons, parmesan, and Caesar dressing",
-    price: "8.99",
-    category: "Starters",
-    isAvailable: true,
-    image: null
-  },
-  {
-    id: 5,
-    name: "Spaghetti Bolognese",
-    description: "Classic pasta with meat sauce and parmesan",
-    price: "13.99",
-    category: "Pasta",
-    isAvailable: true,
-    image: null
-  },
-  {
-    id: 6,
-    name: "Fettuccine Alfredo",
-    description: "Creamy parmesan sauce with garlic and herbs",
-    price: "12.99",
-    category: "Pasta",
-    isAvailable: true,
-    image: null
-  },
-  {
-    id: 7,
-    name: "Chocolate Lava Cake",
-    description: "Warm chocolate cake with a molten center, served with vanilla ice cream",
-    price: "7.99",
-    category: "Desserts",
-    isAvailable: true,
-    image: null
-  },
-  {
-    id: 8,
-    name: "Tiramisu",
-    description: "Classic Italian dessert with coffee-soaked ladyfingers and mascarpone cream",
-    price: "6.99",
-    category: "Desserts",
-    isAvailable: true,
-    image: null
-  },
-  {
-    id: 9,
-    name: "Soft Drinks",
-    description: "Choice of Coke, Sprite, Fanta, or Diet Coke",
-    price: "2.99",
-    category: "Drinks",
-    isAvailable: true,
-    image: null
-  },
-  {
-    id: 10,
-    name: "Fresh Lemonade",
-    description: "Homemade lemonade with mint",
-    price: "3.99",
-    category: "Drinks",
-    isAvailable: true,
-    image: null
-  }
-];
-
 export class DatabaseStorage implements IStorage {
+  // Transaction wrapper utility for standardizing transaction usage
+  private async withTransaction<T>(callback: (tx: any) => Promise<T>): Promise<T> {
+    return db.transaction(async (tx) => {
+      try {
+        return await callback(tx);
+      } catch (error) {
+        console.error('Transaction error:', error);
+        throw error;
+      }
+    });
+  }
+
   constructor() {
     this.initializeDefaultAdmin();
   }
@@ -763,6 +687,19 @@ export class DatabaseStorage implements IStorage {
     return newFeedback;
   }
 
+  // Application Feedback Methods
+  async createApplicationFeedback(feedbackItem: InsertApplicationFeedback): Promise<ApplicationFeedback> {
+    const [newFeedback] = await db
+      .insert(applicationFeedback)
+      .values(feedbackItem)
+      .returning();
+    return newFeedback;
+  }
+
+  async getApplicationFeedbackByRestaurantId(restaurantId: number): Promise<ApplicationFeedback[]> {
+    return await db.select().from(applicationFeedback).where(eq(applicationFeedback.restaurantId, restaurantId));
+  }
+
   // Analytics Methods - Optimized for performance
   async getRestaurantRevenue(restaurantId: number, startDate: Date, endDate: Date): Promise<number> {
     try {
@@ -893,7 +830,7 @@ export class DatabaseStorage implements IStorage {
   // Stripe-related functionality has been removed and replaced with placeholder subscription management
 
   // AI Insights Implementation
-  async getAiInsightsByRestaurantId(restaurantId: number): Promise<any[]> {
+  async getAiInsightsByRestaurantId(restaurantId: number): Promise<AiInsight[]> {
     try {
       const result = await db.select().from(aiInsights).where(eq(aiInsights.restaurantId, restaurantId));
       return result;
@@ -903,7 +840,7 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async createAiInsight(insight: InsertAIInsight): Promise<AIInsight> {
+  async createAiInsight(insight: InsertAiInsight): Promise<AiInsight> {
     try {
       const result = await db.insert(aiInsights).values({
         restaurantId: insight.restaurantId,
@@ -924,7 +861,7 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async updateAiInsight(insightId: number, updates: Partial<InsertAIInsight>): Promise<AIInsight> {
+  async updateAiInsight(insightId: number, updates: Partial<InsertAiInsight>): Promise<AiInsight> {
     try {
       const result = await db
         .update(aiInsights)
@@ -987,8 +924,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createTableSession(session: InsertTableSession): Promise<TableSession> {
-    // Use transaction to ensure atomicity and prevent race conditions
-    return await db.transaction(async (tx) => {
+    // Use withTransaction wrapper for consistency and error handling
+    return this.withTransaction(async (tx) => {
       // Check for existing active session with proper locking
       const existingSession = await tx
         .select()
@@ -1003,7 +940,10 @@ export class DatabaseStorage implements IStorage {
         .limit(1);
 
       if (existingSession.length > 0) {
-        throw new Error(`Table ${session.tableNumber} already has an active session`);
+        // Lookup table number for error message
+        const table = await tx.select().from(tables).where(eq(tables.id, session.tableId)).limit(1);
+        const tableNumber = table[0]?.number ?? session.tableId;
+        throw new Error(`Table ${tableNumber} already has an active session`);
       }
 
       // Create session with optimistic locking
@@ -1068,7 +1008,7 @@ export class DatabaseStorage implements IStorage {
 
   private getValidStatusTransitions(currentStatus: string): string[] {
     const transitions: Record<string, string[]> = {
-      'waiting': ['active', 'cancelled'],
+      'waiting': ['active', 'cancelled', 'completed'],
       'active': ['completed', 'cancelled'],
       'completed': [], // Terminal state
       'cancelled': []  // Terminal state
@@ -1225,65 +1165,326 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateBill(id: number, bill: Partial<InsertBill>): Promise<Bill | undefined> {
-    const [updatedBill] = await db
+    return this.withTransaction(async (tx) => {
+      const [updatedBill] = await tx
       .update(bills)
       .set({ ...bill, updatedAt: new Date() })
       .where(eq(bills.id, id))
       .returning();
     
+      if (!updatedBill) {
+        return undefined;
+      }
+      
     // Invalidate session cache when bill is updated
     if (updatedBill?.tableSessionId) {
       await this.invalidateSessionCache(updatedBill.tableSessionId);
     }
     
     // If bill status is changed to 'paid', update customer payment status
-    if (bill.status === 'paid' && updatedBill?.customerId) {
-      await this.updateCustomer(updatedBill.customerId, { paymentStatus: 'paid' });
+      if (bill.status === 'paid') {
+        if (updatedBill.customerId) {
+          // For individual bills, mark the specific customer as paid
+          await tx
+            .update(customers)
+            .set({ paymentStatus: 'paid', updatedAt: new Date() })
+            .where(eq(customers.id, updatedBill.customerId));
+        } else {
+          // For combined/partial bills, need to determine which customers it covers
+          try {
+            // Get the bill to check its type
+            const [billDetails] = await tx
+              .select()
+              .from(bills)
+              .where(eq(bills.id, id))
+              .limit(1);
+            
+            if (billDetails?.type === 'combined') {
+              // Combined bill - mark all customers in the session as paid
+              await tx
+                .update(customers)
+                .set({ paymentStatus: 'paid', updatedAt: new Date() })
+                .where(eq(customers.tableSessionId, updatedBill.tableSessionId));
+            } 
+            // For partial bills, we can't determine which customers are covered
+          } catch (error) {
+            console.error(`[Storage] Error updating customer payment status for bill ${id}:`, error);
+          }
+        }
       
       // Check if all customers have paid and update session accordingly
       await this.updateSessionPaymentProgress(updatedBill.tableSessionId);
     }
     
     return updatedBill;
+    });
   }
 
   async checkAllCustomersBillsPaid(tableSessionId: number): Promise<boolean> {
-    // Get all customers in the session
-    const customers = await this.getCustomersByTableSessionId(tableSessionId);
-    
-    // Get all bills for the session
-    const sessionBills = await this.getBillsByTableSessionId(tableSessionId);
-    
-    // Check if every customer has a paid bill
-    for (const customer of customers) {
-      const customerBill = sessionBills.find(bill => bill.customerId === customer.id);
-      if (!customerBill || customerBill.status !== 'paid') {
-        return false;
+    try {
+      // Use a more atomic approach by joining customers and bills in a single query
+      const customersWithBills = await db
+        .select({
+          customerId: customers.id,
+          billId: bills.id,
+          billStatus: bills.status
+        })
+        .from(customers)
+        .leftJoin(
+          bills,
+          and(
+            eq(bills.customerId, customers.id),
+            eq(bills.tableSessionId, customers.tableSessionId)
+          )
+        )
+        .where(eq(customers.tableSessionId, tableSessionId));
+
+      if (customersWithBills.length === 0) {
+        return false; // No customers found
       }
+
+      // Check if all customers have associated paid bills
+      const unpaidCustomers = customersWithBills.filter(
+        row => row.billId === null || row.billStatus !== 'paid'
+      );
+
+      return unpaidCustomers.length === 0;
+    } catch (error) {
+      console.error(`[Storage] Error checking bill payments for session ${tableSessionId}:`, error);
+      return false; // Fail safe by assuming not all bills are paid
     }
-    
-    return customers.length > 0; // At least one customer must exist
+  }
+
+  // Check if a session can be marked as completed
+  async canCompleteSession(tableSessionId: number): Promise<{
+    canComplete: boolean;
+    reason?: string;
+    billsPending?: number;
+    hasOrders?: boolean;
+  }> {
+    try {
+      // Check for orders in this session
+      const sessionOrders = await db
+        .select()
+        .from(orders)
+        .where(eq(orders.tableSessionId, tableSessionId));
+
+      // If no orders, session can be completed immediately (no payments needed)
+      if (!sessionOrders.length) {
+        return { 
+          canComplete: true,
+          hasOrders: false
+        };
+      }
+
+      // Check for bills
+      const sessionBills = await db
+        .select()
+        .from(bills)
+        .where(eq(bills.tableSessionId, tableSessionId));
+
+      // If there are orders but no bills, bills need to be generated first
+      if (sessionOrders.length > 0 && sessionBills.length === 0) {
+        return { 
+          canComplete: false,
+          reason: 'Bills need to be generated first',
+          hasOrders: true
+        };
+      }
+
+      // Check if all bills are paid
+      const unpaidBills = sessionBills.filter(bill => bill.status !== 'paid');
+      
+      return {
+        canComplete: unpaidBills.length === 0,
+        reason: unpaidBills.length > 0 ? 'There are unpaid bills' : undefined,
+        billsPending: unpaidBills.length,
+        hasOrders: true
+      };
+    } catch (error) {
+      console.error(`[Storage] Error checking session completion status for ${tableSessionId}:`, error);
+      return { 
+        canComplete: false,
+        reason: 'Error checking session status'
+      };
+    }
+  }
+
+  // Force complete a session (for abandoned sessions)
+  async forceCompleteSession(tableSessionId: number, reason: string): Promise<void> {
+    return this.withTransaction(async (tx) => {
+      // Mark session as completed
+      await tx
+        .update(tableSessions)
+        .set({ 
+          status: 'completed', 
+          endTime: new Date(),
+          updatedAt: new Date()
+        })
+        .where(eq(tableSessions.id, tableSessionId));
+      
+      // Update any pending bills as cancelled
+      await tx
+        .update(bills)
+        .set({
+          status: 'cancelled',
+          updatedAt: new Date()
+        })
+        .where(
+          and(
+            eq(bills.tableSessionId, tableSessionId),
+            eq(bills.status, 'pending')
+          )
+        );
+      
+      // Log the forced completion
+      console.log(`[Storage] Force completed session ${tableSessionId}: ${reason}`);
+      
+      // Get session to sync table occupancy
+      const [session] = await tx
+        .select()
+        .from(tableSessions)
+        .where(eq(tableSessions.id, tableSessionId))
+        .limit(1);
+        
+      if (session?.restaurantId) {
+        // Table occupancy sync happens outside transaction
+        await this.syncTableOccupancy(session.restaurantId);
+      }
+    });
   }
 
   async updateSessionPaymentProgress(tableSessionId: number): Promise<void> {
-    const allPaid = await this.checkAllCustomersBillsPaid(tableSessionId);
+    await this.withTransaction(async (tx) => {
+      // Check for orders first - if no orders, mark as completed
+      const sessionOrders = await tx
+        .select()
+        .from(orders)
+        .where(eq(orders.tableSessionId, tableSessionId));
+      
+      if (sessionOrders.length === 0) {
+        // No orders, so session can be marked as completed immediately
+        await tx
+          .update(tableSessions)
+          .set({ 
+            status: 'completed', 
+            endTime: new Date(),
+            updatedAt: new Date()
+          })
+          .where(eq(tableSessions.id, tableSessionId));
+        
+        // Get session to sync table occupancy
+        const [session] = await tx
+          .select()
+          .from(tableSessions)
+          .where(eq(tableSessions.id, tableSessionId))
+          .limit(1);
+          
+        if (session?.restaurantId) {
+          await this.syncTableOccupancy(session.restaurantId);
+        }
+        return;
+      }
+      
+      // Check if there is a combined bill for the session that is paid
+      const sessionBills = await tx
+        .select()
+        .from(bills)
+        .where(eq(bills.tableSessionId, tableSessionId));
+      
+      // If no bills yet but there are orders, don't complete the session
+      if (sessionBills.length === 0 && sessionOrders.length > 0) {
+        return;
+      }
+      
+      // Count bills by type and status
+      const combinedBills = sessionBills.filter((bill: any) => bill.type === 'combined');
+      const combinedBillPaid = combinedBills.some((bill: any) => bill.status === 'paid');
+      
+      // If there's a paid combined bill, mark session as completed immediately
+      if (combinedBillPaid) {
+        await tx
+          .update(tableSessions)
+          .set({ 
+            status: 'completed', 
+            endTime: new Date(),
+            updatedAt: new Date()
+          })
+          .where(eq(tableSessions.id, tableSessionId));
+        
+        // Get session to sync table occupancy
+        const [session] = await tx
+          .select()
+          .from(tableSessions)
+          .where(eq(tableSessions.id, tableSessionId))
+          .limit(1);
+          
+        if (session?.restaurantId) {
+          // Table occupancy sync happens outside transaction because it's a separate concern
+          await this.syncTableOccupancy(session.restaurantId);
+        }
+        return;
+      }
+      
+      // Otherwise, check if all individual customer bills are paid using an atomic approach
+      const customersWithBills = await tx
+        .select({
+          customerId: customers.id,
+          billId: bills.id,
+          billStatus: bills.status
+        })
+        .from(customers)
+        .leftJoin(
+          bills,
+          and(
+            eq(bills.customerId, customers.id),
+            eq(bills.tableSessionId, customers.tableSessionId)
+          )
+        )
+        .where(eq(customers.tableSessionId, tableSessionId));
+
+      if (customersWithBills.length === 0) {
+        // No customers in the session - this is an edge case
+        // We already know there are orders, which means this is an inconsistent state
+        // Don't complete the session automatically
+        return;
+      }
+
+      // Check if all customers have associated paid bills
+      const unpaidCustomers = customersWithBills.filter(
+        (row: { customerId: number, billId: number | null, billStatus: string | null }) => 
+          row.billId === null || row.billStatus !== 'paid'
+      );
+      
+      const allPaid = unpaidCustomers.length === 0;
     
     if (allPaid) {
       // Mark session as completed and set end time
-      await this.updateTableSession(tableSessionId, {
+        await tx
+          .update(tableSessions)
+          .set({ 
         status: 'completed',
-        endTime: new Date()
-      });
+            endTime: new Date(),
+            updatedAt: new Date()
+          })
+          .where(eq(tableSessions.id, tableSessionId));
       
       // Get session to sync table occupancy for the restaurant
-      const session = await this.getTableSession(tableSessionId);
+        const [session] = await tx
+          .select()
+          .from(tableSessions)
+          .where(eq(tableSessions.id, tableSessionId))
+          .limit(1);
+          
       if (session?.restaurantId) {
+          // Table occupancy sync happens outside transaction because it's a separate concern
         await this.syncTableOccupancy(session.restaurantId);
       }
     } else {
       // Calculate session totals from actual orders and bills
       await this.calculateSessionTotals(tableSessionId);
     }
+    });
   }
 
   // Cache for session totals to avoid recalculating frequently
@@ -1300,34 +1501,53 @@ export class DatabaseStorage implements IStorage {
       return;
     }
 
+    // Use transaction for consistency
+    await this.withTransaction(async (tx) => {
+      try {
     // Get all orders for this session with a single optimized query
-    const sessionOrders = await db
+        const sessionOrders = await tx
       .select()
       .from(orders)
       .where(eq(orders.tableSessionId, tableSessionId));
     
     // Calculate total from orders
-    const orderTotal = sessionOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
+    const orderTotal = sessionOrders.reduce((sum: number, order: { total: string }) => sum + parseFloat(order.total), 0);
     
     // Get bills for payment calculation with single query
-    const sessionBills = await this.getBillsByTableSessionId(tableSessionId);
+        const sessionBills = await tx
+          .select()
+          .from(bills)
+          .where(eq(bills.tableSessionId, tableSessionId));
     
     const paidAmount = sessionBills
-      .filter(bill => bill.status === 'paid')
-      .reduce((sum, bill) => sum + parseFloat(bill.total), 0);
+          .filter((bill: any) => bill.status === 'paid')
+      .reduce((sum: number, bill: { total: string }) => sum + parseFloat(bill.total), 0);
     
     const totals = {
       totalAmount: orderTotal.toString(),
       paidAmount: paidAmount.toString()
     };
 
+        // Get current session to check if totals changed
+        const [currentSession] = await tx
+          .select()
+          .from(tableSessions)
+          .where(eq(tableSessions.id, tableSessionId))
+          .limit(1);
+
     // Update session with accurate totals only if changed
-    const currentSession = await this.getTableSession(tableSessionId);
     if (!currentSession || 
         currentSession.totalAmount !== totals.totalAmount || 
         currentSession.paidAmount !== totals.paidAmount) {
       
-      await this.updateTableSession(tableSessionId, totals);
+          await tx
+            .update(tableSessions)
+            .set({ 
+              ...totals,
+              updatedAt: new Date() 
+            })
+            .where(eq(tableSessions.id, tableSessionId));
+          
       console.log(`[Storage] Updated session ${tableSessionId} totals: ${totals.totalAmount} total, ${totals.paidAmount} paid`);
     }
 
@@ -1335,6 +1555,11 @@ export class DatabaseStorage implements IStorage {
     this.sessionTotalsCache.set(tableSessionId, {
       totals,
       lastUpdated: now
+        });
+      } catch (error) {
+        console.error(`[Storage] Error calculating session totals for session ${tableSessionId}:`, error);
+        // Don't rethrow to prevent blocking other operations
+      }
     });
   }
 
@@ -1345,23 +1570,54 @@ export class DatabaseStorage implements IStorage {
   }
 
   async syncTableOccupancy(restaurantId: number): Promise<void> {
-    // Get all tables for this restaurant
-    const restaurantTables = await db
+    // Improved table occupancy sync with better error handling
+    try {
+      // Get all tables for the restaurant
+      const allTables = await db
       .select()
       .from(tables)
       .where(eq(tables.restaurantId, restaurantId));
 
-    // Get all active sessions for this restaurant
-    const activeSessions = await this.getTableSessionsByRestaurantId(restaurantId, 'active');
-    const occupiedTableIds = new Set(activeSessions.map(session => session.tableId));
-
-    // Update each table's occupancy status
-    for (const table of restaurantTables) {
-      const shouldBeOccupied = occupiedTableIds.has(table.id);
-      
-      if (table.isOccupied !== shouldBeOccupied) {
-        await this.updateTable(table.id, { isOccupied: shouldBeOccupied });
+      if (!allTables.length) {
+        console.log(`[Storage] No tables found for restaurant ${restaurantId} to sync`);
+        return;
       }
+      
+      // For each table, check if it has any active sessions
+      for (const table of allTables) {
+        try {
+          const activeSessions = await db
+            .select()
+            .from(tableSessions)
+            .where(
+              and(
+                eq(tableSessions.tableId, table.id),
+                eq(tableSessions.restaurantId, restaurantId),
+                inArray(tableSessions.status, ['active', 'waiting'])
+              )
+            );
+          
+          const isOccupied = activeSessions.length > 0;
+          
+          // Only update if the status has changed
+          if (table.isOccupied !== isOccupied) {
+            await db
+              .update(tables)
+              .set({ 
+                isOccupied, 
+                updatedAt: new Date() 
+              })
+              .where(eq(tables.id, table.id));
+            
+            console.log(`[Storage] Updated table ${table.number} occupied status to ${isOccupied}`);
+          }
+        } catch (error) {
+          console.error(`[Storage] Error updating table ${table.id} status:`, error);
+          // Continue with other tables even if one fails
+        }
+      }
+    } catch (error) {
+      console.error(`[Storage] Error syncing table occupancy for restaurant ${restaurantId}:`, error);
     }
   }
 
@@ -1375,42 +1631,119 @@ export class DatabaseStorage implements IStorage {
 
   async cleanupEmptySessions(timeoutMinutes: number = 30): Promise<{ removedSessions: number, removedCustomers: number }> {
     const now = new Date();
-    const sessions = await db.select().from(tableSessions).where(inArray(tableSessions.status, ['waiting', 'active']));
+    const cutoffTime = new Date(now.getTime() - timeoutMinutes * 60000);
+    
     let removedSessions = 0;
     let removedCustomers = 0;
-    for (const session of sessions) {
-      const sessionAgeMinutes = (now.getTime() - new Date(session.createdAt).getTime()) / 60000;
-      if (sessionAgeMinutes > timeoutMinutes) {
-        // Check if any orders exist for this session
-        const sessionOrders = await db.select().from(orders).where(eq(orders.tableSessionId, session.id));
-        if (sessionOrders.length === 0) {
-          // Remove all customers for this session
-          const sessionCustomers = await db.select().from(customers).where(eq(customers.tableSessionId, session.id));
-          removedCustomers += sessionCustomers.length;
-          await db.delete(customers).where(eq(customers.tableSessionId, session.id));
-          // Remove the session
-          await db.delete(tableSessions).where(eq(tableSessions.id, session.id));
-          removedSessions++;
-        } else {
-          // Remove ghost customers (never ordered)
-          const sessionCustomers = await db.select().from(customers).where(eq(customers.tableSessionId, session.id));
-          for (const customer of sessionCustomers) {
-            const customerOrders = await db.select().from(orders).where(eq(orders.customerId, customer.id));
-            if (customerOrders.length === 0) {
-              await db.delete(customers).where(eq(customers.id, customer.id));
-              removedCustomers++;
-            }
+
+    try {
+      // Get all sessions that are older than the timeout and are in waiting/active status
+      const oldSessions = await db
+        .select()
+        .from(tableSessions)
+        .where(
+          and(
+            inArray(tableSessions.status, ['waiting', 'active']),
+            lt(tableSessions.createdAt, cutoffTime)
+          )
+        );
+
+      if (oldSessions.length === 0) {
+        return { removedSessions: 0, removedCustomers: 0 };
+      }
+
+      const sessionIds = oldSessions.map(s => s.id);
+
+      // Get all orders for these sessions in one query
+      const sessionOrders = await db
+        .select({ tableSessionId: orders.tableSessionId })
+        .from(orders)
+        .where(inArray(orders.tableSessionId, sessionIds));
+
+      // Create a set of session IDs that have orders
+      const sessionsWithOrders = new Set(sessionOrders.map(o => o.tableSessionId));
+
+      // Separate sessions into those with orders and those without
+      const sessionsToDelete = oldSessions.filter(s => !sessionsWithOrders.has(s.id));
+      const sessionsToClean = oldSessions.filter(s => sessionsWithOrders.has(s.id));
+
+      // Delete sessions that have no orders (and their customers)
+      if (sessionsToDelete.length > 0) {
+        const sessionsToDeleteIds = sessionsToDelete.map(s => s.id);
+        
+        // Delete customers for these sessions
+        const deletedCustomers = await db
+          .delete(customers)
+          .where(inArray(customers.tableSessionId, sessionsToDeleteIds))
+          .returning();
+        
+        removedCustomers += deletedCustomers.length;
+
+        // Delete the sessions
+        await db
+          .delete(tableSessions)
+          .where(inArray(tableSessions.id, sessionsToDeleteIds));
+        
+        removedSessions += sessionsToDeleteIds.length;
+      }
+
+      // For sessions with orders, remove ghost customers (customers with no orders)
+      if (sessionsToClean.length > 0) {
+        const sessionsToCleanIds = sessionsToClean.map(s => s.id);
+        
+        // Get all customers for these sessions
+        const sessionCustomers = await db
+          .select()
+          .from(customers)
+          .where(inArray(customers.tableSessionId, sessionsToCleanIds));
+
+        if (sessionCustomers.length > 0) {
+          const customerIds = sessionCustomers.map(c => c.id);
+          
+          // Get all orders for these customers
+          const customerOrders = await db
+            .select({ customerId: orders.customerId })
+            .from(orders)
+            .where(inArray(orders.customerId, customerIds));
+
+          // Create a set of customer IDs that have orders
+          const customersWithOrders = new Set(customerOrders.map(o => o.customerId));
+
+          // Find customers without orders
+          const ghostCustomerIds = customerIds.filter(id => !customersWithOrders.has(id));
+
+          if (ghostCustomerIds.length > 0) {
+            // Delete ghost customers
+            await db
+              .delete(customers)
+              .where(inArray(customers.id, ghostCustomerIds));
+            
+            removedCustomers += ghostCustomerIds.length;
           }
         }
       }
+
+      return { removedSessions, removedCustomers };
+    } catch (error) {
+      console.error('[Storage] Error during session cleanup:', error);
+      return { removedSessions: 0, removedCustomers: 0 };
     }
-    return { removedSessions, removedCustomers };
   }
 
   // Mock menu items for test restaurant
   async getMenuItems(restaurantId: number): Promise<MenuItem[]> {
     // Fetch menu items from the database for the given restaurant
     return await db.select().from(menuItems).where(eq(menuItems.restaurantId, restaurantId));
+  }
+
+  // Fetch menu items by array of IDs
+  async getMenuItemsByIds(menuItemIds: number[]): Promise<MenuItem[]> {
+    if (!menuItemIds.length) return [];
+    
+    return db
+      .select()
+      .from(menuItems)
+      .where(inArray(menuItems.id, menuItemIds));
   }
 
   // Log or update a chat session for a restaurant

@@ -40,7 +40,7 @@ export interface AIInsight {
     metrics: string[];
     timeframe: string;
   };
-  confidence: number;
+  confidence: number | string; // Allow both number and string
   priority: 'low' | 'medium' | 'high' | 'critical';
   isRead: boolean;
   implementationStatus: 'pending' | 'in_progress' | 'completed' | 'dismissed';
@@ -644,17 +644,17 @@ Focus on immediate, implementable actions that can impact revenue or operations 
         );
         
         if (!alreadyExists) {
-          const aiInsight: AIInsight = {
-            restaurantId,
+          const aiInsight = {
             type: insight.type,
+            restaurantId,
             title: insight.title,
             description: insight.description,
             recommendations: insight.recommendations,
             dataSource: insight.dataSource,
-            confidence: insight.confidence * 100,
+            confidence: String(insight.confidence * 100), // Convert to string for storage
             priority: insight.priority,
             isRead: false,
-            implementationStatus: 'pending'
+            implementationStatus: 'pending' as const
           };
           await storage.createAiInsight(aiInsight);
           aiInsights.push(aiInsight);
@@ -690,7 +690,7 @@ function generateMockInsights(restaurantId: number): AIInsight[] {
         metrics: ['table_occupancy', 'hourly_revenue'],
         timeframe: 'today'
       },
-      confidence: 92,
+      confidence: '92', // Convert to string
       priority: 'high',
       isRead: false,
       implementationStatus: 'pending'
@@ -709,7 +709,7 @@ function generateMockInsights(restaurantId: number): AIInsight[] {
         metrics: ['item_profitability', 'order_frequency'],
         timeframe: '7d'
       },
-      confidence: 88,
+      confidence: '88', // Convert to string
       priority: 'high',
       isRead: false,
       implementationStatus: 'pending'
@@ -728,7 +728,7 @@ function generateMockInsights(restaurantId: number): AIInsight[] {
         metrics: ['preparation_time', 'customer_complaints'],
         timeframe: '7d'
       },
-      confidence: 85,
+      confidence: '85', // Convert to string
       priority: 'medium',
       isRead: false,
       implementationStatus: 'pending'
@@ -747,7 +747,7 @@ function generateMockInsights(restaurantId: number): AIInsight[] {
         metrics: ['customer_rating', 'review_sentiment'],
         timeframe: '7d'
       },
-      confidence: 90,
+      confidence: '90', // Convert to string
       priority: 'high',
       isRead: false,
       implementationStatus: 'pending'
@@ -763,7 +763,19 @@ function isSimilar(a: string, b: string): boolean {
 // Export existing functions (updated)
 export async function getRestaurantInsights(restaurantId: number): Promise<AIInsight[]> {
   try {
-    return await storage.getAiInsightsByRestaurantId(restaurantId);
+    const insights = await storage.getAiInsightsByRestaurantId(restaurantId);
+    // Ensure the returned insights match the AIInsight interface
+    return insights.map(insight => ({
+      ...insight,
+      recommendations: Array.isArray(insight.recommendations) 
+        ? insight.recommendations 
+        : (typeof insight.recommendations === 'string' 
+            ? JSON.parse(insight.recommendations) 
+            : []),
+      confidence: typeof insight.confidence === 'string' 
+        ? parseFloat(insight.confidence) 
+        : insight.confidence
+    })) as AIInsight[];
   } catch (error) {
     console.error('Error fetching AI insights:', error);
     return [];

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "wouter";
+import { useParams, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { useRestaurant } from "@/contexts/RestaurantContext";
 import { useCart } from "@/contexts/CartContext";
@@ -17,6 +17,7 @@ import type { MenuItem } from "@shared/schema";
 
 export default function CustomerMenu() {
   const params = useParams();
+  const [, navigate] = useLocation();
   const { 
     restaurantId, 
     tableNumber, 
@@ -25,7 +26,8 @@ export default function CustomerMenu() {
     customer,
     setRestaurantId, 
     setTableNumber,
-    isLoading: restaurantLoading 
+    isLoading: restaurantLoading,
+    isHydrating
   } = useRestaurant();
   
   const { itemCount } = useCart();
@@ -49,19 +51,26 @@ export default function CustomerMenu() {
     }
   }, [params, restaurantId, setRestaurantId, setTableNumber]);
 
-  // Show session modal if no customer is registered
+  // Show session modal if no customer is registered, but only after hydration
   useEffect(() => {
-    if (restaurantId && tableNumber && !customer) {
+    if (!isHydrating && restaurantId && tableNumber && !customer) {
       setShowSessionModal(true);
     }
-  }, [restaurantId, tableNumber, customer]);
+  }, [isHydrating, restaurantId, tableNumber, customer]);
+
+  // Redirect to entry page if the customer or session is not set
+  useEffect(() => {
+    if (!isHydrating && !customer && !session) {
+      navigate(`/menu/${params.restaurantId}/${params.tableId}/entry`);
+    }
+  }, [isHydrating, customer, session, params, navigate]);
 
   const { data: menuResponse, isLoading: menuLoading } = useQuery({
     queryKey: [`/api/public/restaurants/${restaurantId}/menu-items`],
     enabled: !!restaurantId,
   });
 
-  if (restaurantLoading || menuLoading) {
+  if (restaurantLoading || menuLoading || isHydrating) {
     return (
       <div className="min-h-screen bg-white flex items-center justify-center">
         <div className="text-center">

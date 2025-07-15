@@ -2,6 +2,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useState } from "react";
 import { Link } from "wouter";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { useTranslation } from "react-i18next";
 
 interface MobileMenuProps {
   active: string;
@@ -10,15 +11,18 @@ interface MobileMenuProps {
 export function MobileMenu({ active }: MobileMenuProps) {
   const { user, logout } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
+  const { t } = useTranslation();
 
   // Menu items for restaurant admin
-  const restaurantMenuItems = [
-    { label: "Dashboard", href: "/dashboard", icon: "dashboard" },
-    { label: "Menu Management", href: "/menu-management", icon: "restaurant_menu" },
-    { label: "Tables", href: "/tables", icon: "table_bar" },
-    { label: "Orders", href: "/orders", icon: "receipt_long" },
-    { label: "Analytics", href: "/analytics", icon: "bar_chart" },
-    { label: "Settings", href: "/settings", icon: "settings" },
+  const menuItems = [
+    { label: t("dashboard", "Dashboard"), href: "/dashboard", icon: "dashboard" },
+    { label: t("orders", "Orders"), href: "/orders", icon: "orders" },
+    { label: t("tables", "Tables"), href: "/tables", icon: "tables" },
+    { label: t("menu", "Menu"), href: "/menu-management", icon: "menu" },
+    { label: t("analytics", "Analytics"), href: "/analytics", icon: "analytics" },
+    { label: t("settings", "Settings"), href: "/settings", icon: "settings" },
+    // Remove subscription tab and add support
+    { label: t("support", "Support"), href: "/support", icon: "support" },
   ];
 
   // Menu items for admin section
@@ -29,7 +33,7 @@ export function MobileMenu({ active }: MobileMenuProps) {
     { label: "Settings", href: "/admin/settings", icon: "settings" },
   ];
 
-  const menuItems = user?.role === 'platform_admin' ? adminMenuItems : restaurantMenuItems;
+  const currentMenuItems = user?.role === 'platform_admin' ? adminMenuItems : menuItems;
 
   return (
     <>
@@ -71,7 +75,7 @@ export function MobileMenu({ active }: MobileMenuProps) {
           </div>
           <div className="mt-5 flex-1 h-0 overflow-y-auto">
             <nav className="px-2 space-y-1">
-              {menuItems.map((item) => (
+              {currentMenuItems.map((item) => (
                 <Link
                   key={item.href}
                   href={item.href}

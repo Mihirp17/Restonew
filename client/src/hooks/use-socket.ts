@@ -49,9 +49,9 @@ export function useSocket(restaurantId?: number, tableId?: number) {
   // Create reconnect callback
   const reconnect = useCallback(() => {
     if (restaurantId && restaurantId > 0) {
-      reconnectWebSocket(restaurantId, tableId);
+      reconnectWebSocket();
     }
-  }, [restaurantId, tableId]);
+  }, [restaurantId]);
   
   // Return the socket methods
   return {

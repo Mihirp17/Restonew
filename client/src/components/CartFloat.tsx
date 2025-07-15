@@ -20,12 +20,11 @@ export default function CartFloat({ onClick }: CartFloatProps) {
       >
         <div className="relative">
           <ShoppingCart className="h-5 w-5" />
-          <span className="absolute -top-2 -right-2 bg-white text-red-600 rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold">
+          <span className="absolute -top-1 -right-1 bg-white text-red-600 border border-white rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold">
             {itemCount}
           </span>
         </div>
       </Button>
-      <span className="absolute bottom-16 right-0 text-white text-lg font-bold">{formatCurrency(total)}</span>
     </div>
   );
 } 

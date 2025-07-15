@@ -5,8 +5,23 @@ import session from 'express-session';
 import { sessionConfig, authenticate, authorize, authorizeRestaurant, loginPlatformAdmin, loginRestaurant, loginUser } from "./auth";
 import { setupWebSocketServer } from "./socket";
 import { z } from "zod";
-import { insertRestaurantSchema, insertUserSchema, insertMenuItemSchema, insertTableSchema, insertOrderSchema, insertOrderItemSchema, insertFeedbackSchema } from "@shared/schema";
-// Stripe functionality removed - import { stripe, createOrUpdateCustomer, createSubscription, updateSubscription, cancelSubscription, generateClientSecret, handleWebhookEvent, PLANS } from "./stripe";
+import { 
+  insertRestaurantSchema, 
+  insertUserSchema, 
+  insertMenuItemSchema, 
+  insertTableSchema, 
+  insertOrderSchema, 
+  insertOrderItemSchema, 
+  insertFeedbackSchema, 
+  insertApplicationFeedbackSchema 
+} from "@shared/schema";
+import { 
+  billSchema, 
+  updateBillSchema,
+  loginSchema as sharedLoginSchema, 
+  dateRangeSchema as sharedDateRangeSchema,
+  validateData
+} from "@shared/validations";
 import QRCode from 'qrcode';
 import { generateRestaurantInsights, handleRestaurantChat, generateAnalyticsInsights } from './ai';
 import { OrderItem, Order } from "@shared/schema";
@@ -40,7 +55,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   console.log("Setting up authentication routes...");
   app.post('/api/auth/login', async (req, res) => {
     try {
-      const validation = loginSchema.safeParse(req.body);
+      const validation = sharedLoginSchema.safeParse(req.body);
       if (!validation.success) {
         return res.status(400).json({ errors: validation.error.errors });
       }
@@ -433,24 +448,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put('/api/restaurants/:restaurantId/bills/:billId', authenticate, authorizeRestaurant, async (req, res) => {
+  app.put('/api/restaurants/:restaurantId/bills/:billId', authenticate, authorizeRestaurant, async (req, res, next) => {
     try {
       const restaurantId = parseInt(req.params.restaurantId);
       const billId = parseInt(req.params.billId);
       
       if (isNaN(restaurantId) || isNaN(billId)) {
-        return res.status(400).json({ message: 'Invalid ID' });
+        return res.status(400).json({ message: 'Invalid restaurant ID or bill ID' });
       }
 
-      const updatedBill = await storage.updateBill(billId, req.body);
+      // Validate with shared schema
+      const validation = validateData(updateBillSchema, req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: 'Invalid bill data', 
+          errors: validation.errors 
+        });
+      }
+
+      // Check if bill belongs to restaurant
+      const bill = await storage.getBill(billId);
+      if (!bill) {
+        return res.status(404).json({ message: 'Bill not found' });
+      }
+      
+      const session = await storage.getTableSession(bill.tableSessionId);
+      if (!session || session.restaurantId !== restaurantId) {
+        return res.status(403).json({ message: 'Bill does not belong to this restaurant' });
+      }
+
+      // Ensure validation.data is not undefined
+      if (!validation.data) {
+        return res.status(400).json({ message: 'Invalid bill data' });
+      }
+
+      const updatedBill = await storage.updateBill(billId, validation.data);
       if (!updatedBill) {
         return res.status(404).json({ message: 'Bill not found' });
       }
 
       return res.json(updatedBill);
     } catch (error) {
-      console.error('Error updating bill:', error);
-      return res.status(500).json({ message: 'Failed to update bill' });
+      next(error);
     }
   });
   console.log("Table session and bill routes set up successfully");
@@ -1283,12 +1323,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: 'Invalid restaurant ID' });
       }
 
-      const validation = dateRangeSchema.safeParse(req.body);
+      const validation = sharedDateRangeSchema.safeParse(req.body);
       if (!validation.success) {
         return res.status(400).json({ errors: validation.error.errors });
       }
 
-      const { startDate, endDate } = validation.data;
+      const { startDate: startDateStr, endDate: endDateStr } = validation.data;
+      const startDate = new Date(startDateStr);
+      const endDate = new Date(endDateStr);
       
       // Fetch all analytics data in parallel for better performance
       const [revenue, orderCount, averageOrderValue, tables] = await Promise.all([
@@ -1318,12 +1360,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: 'Invalid restaurant ID' });
       }
 
-      const validation = dateRangeSchema.safeParse(req.body);
+      const validation = sharedDateRangeSchema.safeParse(req.body);
       if (!validation.success) {
         return res.status(400).json({ errors: validation.error.errors });
       }
 
-      const { startDate, endDate } = validation.data;
+      const { startDate: startDateStr, endDate: endDateStr } = validation.data;
+      const startDate = new Date(startDateStr);
+      const endDate = new Date(endDateStr);
       const revenue = await storage.getRestaurantRevenue(restaurantId, startDate, endDate);
       return res.json({ revenue });
     } catch (error) {
@@ -1339,12 +1383,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: 'Invalid restaurant ID' });
       }
 
-      const validation = dateRangeSchema.safeParse(req.body);
+      const validation = sharedDateRangeSchema.safeParse(req.body);
       if (!validation.success) {
         return res.status(400).json({ errors: validation.error.errors });
       }
 
-      const { startDate, endDate } = validation.data;
+      const { startDate: startDateStr, endDate: endDateStr } = validation.data;
+      const startDate = new Date(startDateStr);
+      const endDate = new Date(endDateStr);
       const orderCount = await storage.getOrderCountByRestaurantId(restaurantId, startDate, endDate);
       return res.json({ orderCount });
     } catch (error) {
@@ -1360,12 +1406,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: 'Invalid restaurant ID' });
       }
 
-      const validation = dateRangeSchema.safeParse(req.body);
+      const validation = sharedDateRangeSchema.safeParse(req.body);
       if (!validation.success) {
         return res.status(400).json({ errors: validation.error.errors });
       }
 
-      const { startDate, endDate } = validation.data;
+      const { startDate: startDateStr, endDate: endDateStr } = validation.data;
+      const startDate = new Date(startDateStr);
+      const endDate = new Date(endDateStr);
       const averageOrderValue = await storage.getAverageOrderValue(restaurantId, startDate, endDate);
       return res.json({ averageOrderValue });
     } catch (error) {
@@ -1382,11 +1430,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 10;
-      const { startDate, endDate } = req.query;
       const options: any = {};
-      if (startDate && endDate) {
-        options.startDate = new Date(startDate as string);
-        options.endDate = new Date(endDate as string);
+      if (req.query.startDate && req.query.endDate) {
+        options.startDate = new Date(req.query.startDate as string);
+        options.endDate = new Date(req.query.endDate as string);
         console.log('Popular items API: Date range received:', { startDate: options.startDate, endDate: options.endDate });
       }
       console.log('Popular items API: Calling storage with options:', { restaurantId, limit, options });
@@ -2235,12 +2282,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const restaurantId = parseInt(req.params.restaurantId);
       if (isNaN(restaurantId)) return res.status(400).json({ message: 'Invalid restaurant ID' });
 
-      const validation = dateRangeSchema.safeParse(req.body);
+      const validation = sharedDateRangeSchema.safeParse(req.body);
       if (!validation.success) {
         return res.status(400).json({ errors: validation.error.errors });
       }
 
-      const { startDate, endDate } = validation.data;
+      const { startDate: startDateStr, endDate: endDateStr } = validation.data;
+      const startDate = new Date(startDateStr);
+      const endDate = new Date(endDateStr);
       const insights = await generateAnalyticsInsights({ restaurantId, startDate, endDate });
       return res.json(insights);
     } catch (error) {
@@ -2401,6 +2450,315 @@ export async function registerRoutes(app: Express): Promise<Server> {
   setupWebSocketServer(httpServer);
   console.log("WebSocket server set up successfully");
 
+  // Application Feedback Routes
+  console.log("Setting up application feedback routes...");
+  app.post('/api/restaurants/:restaurantId/application-feedback', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+      const validation = insertApplicationFeedbackSchema.safeParse({
+        ...req.body,
+        restaurantId,
+        userId: req.session.user?.id || null
+      });
+      if (!validation.success) {
+        return res.status(400).json({ errors: validation.error.errors });
+      }
+      const feedback = await storage.createApplicationFeedback(validation.data);
+      return res.status(201).json(feedback);
+    } catch (error) {
+      console.error('Error creating application feedback:', error);
+      return res.status(500).json({ message: 'Failed to create application feedback' });
+    }
+  });
+
+  app.get('/api/restaurants/:restaurantId/application-feedback', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+      const feedbackList = await storage.getApplicationFeedbackByRestaurantId(restaurantId);
+      return res.json(feedbackList);
+    } catch (error) {
+      console.error('Error fetching application feedback:', error);
+      return res.status(500).json({ message: 'Failed to fetch application feedback' });
+    }
+  });
+
   console.log("Route registration completed successfully");
+
+  // Batch API endpoint for session data with orders, customers, and bills
+  app.get('/api/restaurants/:restaurantId/table-sessions/:sessionId/combined', authenticate, authorizeRestaurant, async (req, res, next) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const sessionId = parseInt(req.params.sessionId);
+      
+      if (isNaN(restaurantId) || isNaN(sessionId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or session ID' });
+      }
+
+      // Get session data
+      const session = await storage.getTableSession(sessionId);
+      
+      if (!session) {
+        return res.status(404).json({ message: 'Table session not found' });
+      }
+      
+      if (session.restaurantId !== restaurantId) {
+        return res.status(403).json({ message: 'Session does not belong to this restaurant' });
+      }
+      
+      // Get all related data in parallel
+      const [sessionCustomers, sessionOrders, sessionBills, sessionTable] = await Promise.all([
+        storage.getCustomersByTableSessionId(sessionId),
+        storage.getOrdersByTableSessionId(sessionId),
+        storage.getBillsByTableSessionId(sessionId),
+        session.tableId ? storage.getTable(session.tableId) : null
+      ]);
+      
+      // Get menu items for all orders
+      const menuItemIds = new Set<number>();
+      sessionOrders.forEach((order: any) => {
+        if (order.items && Array.isArray(order.items)) {
+          order.items.forEach((item: any) => {
+            menuItemIds.add(item.menuItemId);
+          });
+        }
+      });
+      
+      // If there are menu items, fetch them
+      let menuItems: any[] = [];
+      if (menuItemIds.size > 0) {
+        menuItems = await storage.getMenuItemsByIds(Array.from(menuItemIds));
+      }
+      
+      // Build menu item lookup map
+      const menuItemsMap = menuItems.reduce((acc: Record<number, any>, item: any) => {
+        acc[item.id] = item;
+        return acc;
+      }, {} as Record<number, any>);
+      
+      // Enhance orders with menu item details
+      const enhancedOrders = sessionOrders.map((order: any) => {
+        return {
+          ...order,
+          items: order.items && Array.isArray(order.items) ? order.items.map((item: any) => {
+            const menuItem = menuItemsMap[item.menuItemId];
+            return {
+              ...item,
+              menuItemName: menuItem?.name || 'Unknown Item',
+              menuItemPrice: menuItem?.price || '0.00',
+              category: menuItem?.category || 'Uncategorized'
+            };
+          }) : []
+        };
+      });
+      
+      // Group orders by customer
+      const ordersByCustomer = enhancedOrders.reduce((acc: Record<number, any[]>, order: any) => {
+        if (!acc[order.customerId]) {
+          acc[order.customerId] = [];
+        }
+        acc[order.customerId].push(order);
+        return acc;
+      }, {} as Record<number, any[]>);
+      
+      // Combine bills with customers
+      const customersWithBills = sessionCustomers.map(customer => {
+        const customerBills = sessionBills.filter(bill => bill.customerId === customer.id);
+        const customerOrders = ordersByCustomer[customer.id] || [];
+        const totalAmount = customerOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
+        
+        return {
+          ...customer,
+          bills: customerBills,
+          orders: customerOrders,
+          totalAmount: totalAmount.toFixed(2)
+        };
+      });
+      
+      // Build the combined response
+      const combinedData = {
+        session: {
+          ...session,
+          table: sessionTable
+        },
+        customers: customersWithBills,
+        orders: enhancedOrders,
+        bills: sessionBills,
+        combinedBills: sessionBills.filter(bill => bill.type === 'combined'),
+      };
+      
+      return res.json(combinedData);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Add endpoint to check session completion status
+  app.get('/api/restaurants/:restaurantId/table-sessions/:sessionId/completion-status', authenticate, authorizeRestaurant, async (req, res, next) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const sessionId = parseInt(req.params.sessionId);
+      
+      if (isNaN(restaurantId) || isNaN(sessionId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or session ID' });
+      }
+
+      // Check if session belongs to restaurant
+      const session = await storage.getTableSession(sessionId);
+      if (!session) {
+        return res.status(404).json({ message: 'Table session not found' });
+      }
+      
+      if (session.restaurantId !== restaurantId) {
+        return res.status(403).json({ message: 'Session does not belong to this restaurant' });
+      }
+
+      // Check if session can be completed
+      const completionStatus = await storage.canCompleteSession(sessionId);
+      return res.json(completionStatus);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Add endpoint to force-complete a session
+  app.post('/api/restaurants/:restaurantId/table-sessions/:sessionId/force-complete', authenticate, authorizeRestaurant, async (req, res, next) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const sessionId = parseInt(req.params.sessionId);
+      
+      if (isNaN(restaurantId) || isNaN(sessionId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or session ID' });
+      }
+
+      // Check if session belongs to restaurant
+      const session = await storage.getTableSession(sessionId);
+      if (!session) {
+        return res.status(404).json({ message: 'Table session not found' });
+      }
+      
+      if (session.restaurantId !== restaurantId) {
+        return res.status(403).json({ message: 'Session does not belong to this restaurant' });
+      }
+
+      const { reason = 'Forced by admin' } = req.body;
+      await storage.forceCompleteSession(sessionId, reason);
+      
+      return res.json({ 
+        success: true, 
+        message: 'Session force-completed successfully',
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Create a bill
+  app.post('/api/restaurants/:restaurantId/bills', authenticate, authorizeRestaurant, async (req, res, next) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      // Validate with shared schema
+      const validation = validateData(billSchema, req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: 'Invalid bill data', 
+          errors: validation.errors 
+        });
+      }
+
+      const validatedData = validation.data;
+      
+      // Helper function to generate a bill number
+      const generateBillNumber = () => {
+        const timestamp = Date.now();
+        const random = Math.floor(Math.random() * 1000);
+        return `BILL-${timestamp}-${random}`;
+      };
+      
+      // Check if bill already exists for this customer and session (for individual bills)
+      if (validatedData && validatedData.customerId) {
+        const existingBill = await storage.getBillByCustomerAndSession(validatedData.customerId, validatedData.tableSessionId);
+        if (existingBill) {
+          return res.status(409).json({ message: 'Bill already exists for this customer and session' });
+        }
+      }
+
+      if (!validatedData) {
+        return res.status(400).json({ message: 'Invalid bill data' });
+      }
+
+      const bill = await storage.createBill({
+        ...validatedData,
+        billNumber: validatedData.billNumber || generateBillNumber(),
+        status: validatedData.status || 'pending',
+        tax: validatedData.tax || '0.00',
+        tip: validatedData.tip || '0.00'
+      });
+
+      return res.status(201).json(bill);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Update a bill
+  app.put('/api/restaurants/:restaurantId/bills/:billId', authenticate, authorizeRestaurant, async (req, res, next) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      const billId = parseInt(req.params.billId);
+      
+      if (isNaN(restaurantId) || isNaN(billId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID or bill ID' });
+      }
+
+      // Validate with shared schema
+      const validation = validateData(updateBillSchema, req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: 'Invalid bill data', 
+          errors: validation.errors 
+        });
+      }
+
+      // Check if bill belongs to restaurant
+      const bill = await storage.getBill(billId);
+      if (!bill) {
+        return res.status(404).json({ message: 'Bill not found' });
+      }
+      
+      const session = await storage.getTableSession(bill.tableSessionId);
+      if (!session || session.restaurantId !== restaurantId) {
+        return res.status(403).json({ message: 'Bill does not belong to this restaurant' });
+      }
+
+      // Ensure validation.data is not undefined
+      if (!validation.data) {
+        return res.status(400).json({ message: 'Invalid bill data' });
+      }
+
+      const updatedBill = await storage.updateBill(billId, validation.data);
+      if (!updatedBill) {
+        return res.status(404).json({ message: 'Bill not found' });
+      }
+
+      return res.json(updatedBill);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   return httpServer;
 }
