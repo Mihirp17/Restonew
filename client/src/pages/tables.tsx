@@ -74,6 +74,7 @@ interface TableSession {
     id: number;
     number: number;
   };
+  billRequested?: boolean;
 }
 
 interface Bill {
