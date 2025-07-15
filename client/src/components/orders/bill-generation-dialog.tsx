@@ -106,131 +106,129 @@ export function BillGenerationDialog({
       setBillsOffset(0);
       setBillsHasMore(true);
       fetchBills(true);
+      // Always fetch latest session/orders
+      fetchTableSession();
     }
     // eslint-disable-next-line
   }, [isOpen, tableSessionId, restaurantId]);
 
   // Fetch table session data
-  useEffect(() => {
-    const fetchTableSession = async () => {
-      if (!tableSessionId || !restaurantId) return;
+  const fetchTableSession = async () => {
+    if (!tableSessionId || !restaurantId) return;
 
-      try {
-        const sessionData = await apiRequest({
-          method: 'GET',
-          url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}`
-        });
-        
-        // Fetch all orders for the session in one call
-        const allOrders = await apiRequest({
-          method: 'GET',
-          url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}/orders`
-        });
-        console.log('🔍 Bill Generation Debug - All orders fetched:', allOrders);
-        console.log('🔍 Bill Generation Debug - Orders count:', allOrders?.length || 0);
-        console.log('🔍 Bill Generation Debug - Session ID:', tableSessionId);
-        console.log('🔍 Bill Generation Debug - Restaurant ID:', restaurantId);
-        
-        // If no orders found, try to get orders by restaurant and filter by customers
-        let finalOrders = allOrders;
-        if (!allOrders || allOrders.length === 0) {
-          console.log('🔍 No orders found for session, trying fallback approach...');
-          try {
-            // Get all orders for the restaurant
-            const allRestaurantOrders = await apiRequest({
-              method: 'GET',
-              url: `/api/restaurants/${restaurantId}/orders`
-            });
-            console.log('🔍 Fallback - All restaurant orders:', allRestaurantOrders?.length || 0);
-            
-            // Filter orders by customers in this session
-            const customerIds = (sessionData.customers || []).map((c: Customer) => c.id);
-            const sessionOrders = allRestaurantOrders.filter((order: any) => 
-              customerIds.includes(order.customerId)
-            );
-            console.log('🔍 Fallback - Session orders found:', sessionOrders.length);
-            console.log('🔍 Fallback - Customer IDs:', customerIds);
-            console.log('🔍 Fallback - Session orders:', sessionOrders);
-            
-            finalOrders = sessionOrders;
-          } catch (fallbackError) {
-            console.error('🔍 Fallback approach failed:', fallbackError);
-          }
-        }
-        
-        // Group orders by customerId
-        const ordersByCustomer: Record<number, Order[]> = {};
-        for (const order of finalOrders) {
-          if (!ordersByCustomer[order.customerId]) ordersByCustomer[order.customerId] = [];
-          ordersByCustomer[order.customerId].push(order);
-        }
-        // Attach orders and totals to each customer
-        const customersWithOrders = (sessionData.customers || []).map((customer: Customer) => {
-          const orders = ordersByCustomer[customer.id] || [];
-          const customerTotal = orders.reduce((sum: number, order: Order) => sum + parseFloat(order.total), 0);
-          console.log(`🔍 Customer ${customer.name} - Orders:`, orders.length, 'Total:', customerTotal);
-          return {
-            ...customer,
-            orders,
-            totalAmount: customerTotal
-          };
-        });
-
-        // Check for existing bills
-        const sessionBills = await apiRequest({
-          method: 'GET',
-          url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}/bills`
-        });
-
-        // Add bill status to customers
-        const customersWithBillStatus = customersWithOrders.map((customer: Customer) => ({
-          ...customer,
-          existingBill: sessionBills.find((bill: any) => bill.customerId === customer.id),
-          hasExistingBill: sessionBills.some((bill: any) => bill.customerId === customer.id)
-        }));
-
-        setTableSession({
-          ...sessionData,
-          customers: customersWithBillStatus
-        });
-        
-        // Set default selected customers based on split type
-        if (sessionData.splitType === 'individual') {
-          setSelectedCustomers([]);
-        } else if (sessionData.splitType === 'combined') {
-          setSelectedCustomers(customersWithOrders.map((c: Customer) => c.id));
-        }
-
-        // When selecting customers in custom mode, don't select ones with existing bills
-        if (sessionData.splitType === 'custom') {
-          const eligibleCustomers = customersWithBillStatus
-            .filter((c: Customer) => !c.hasExistingBill)
-            .map((c: Customer) => c.id);
-          setSelectedCustomers(eligibleCustomers);
-        }
-      } catch (error: any) {
-        // Detect 404
-        if (error?.response?.status === 404) {
-          toast({
-            title: "Session Ended",
-            description: "This session no longer exists or has ended. The list will refresh.",
-            variant: "destructive"
+    try {
+      const sessionData = await apiRequest({
+        method: 'GET',
+        url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}`
+      });
+      
+      // Fetch all orders for the session in one call
+      const allOrders = await apiRequest({
+        method: 'GET',
+        url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}/orders`
+      });
+      console.log('🔍 Bill Generation Debug - All orders fetched:', allOrders);
+      console.log('🔍 Bill Generation Debug - Orders count:', allOrders?.length || 0);
+      console.log('🔍 Bill Generation Debug - Session ID:', tableSessionId);
+      console.log('🔍 Bill Generation Debug - Restaurant ID:', restaurantId);
+      
+      // If no orders found, try to get orders by restaurant and filter by customers
+      let finalOrders = allOrders;
+      if (!allOrders || allOrders.length === 0) {
+        console.log('🔍 No orders found for session, trying fallback approach...');
+        try {
+          // Get all orders for the restaurant
+          const allRestaurantOrders = await apiRequest({
+            method: 'GET',
+            url: `/api/restaurants/${restaurantId}/orders`
           });
-          onOpenChange(false); // Close dialog
-          if (typeof (window as any).refreshSessions === "function") (window as any).refreshSessions();
-          return;
+          console.log('🔍 Fallback - All restaurant orders:', allRestaurantOrders?.length || 0);
+          
+          // Filter orders by customers in this session
+          const customerIds = (sessionData.customers || []).map((c: Customer) => c.id);
+          const sessionOrders = allRestaurantOrders.filter((order: any) => 
+            customerIds.includes(order.customerId)
+          );
+          console.log('🔍 Fallback - Session orders found:', sessionOrders.length);
+          console.log('🔍 Fallback - Customer IDs:', customerIds);
+          console.log('🔍 Fallback - Session orders:', sessionOrders);
+          
+          finalOrders = sessionOrders;
+        } catch (fallbackError) {
+          console.error('🔍 Fallback approach failed:', fallbackError);
         }
-        console.error('Error fetching table session:', error);
+      }
+      
+      // Group orders by customerId
+      const ordersByCustomer: Record<number, Order[]> = {};
+      for (const order of finalOrders) {
+        if (!ordersByCustomer[order.customerId]) ordersByCustomer[order.customerId] = [];
+        ordersByCustomer[order.customerId].push(order);
+      }
+      // Attach orders and totals to each customer
+      const customersWithOrders = (sessionData.customers || []).map((customer: Customer) => {
+        const orders = ordersByCustomer[customer.id] || [];
+        const customerTotal = orders.reduce((sum: number, order: Order) => sum + parseFloat(order.total), 0);
+        console.log(`🔍 Customer ${customer.name} - Orders:`, orders.length, 'Total:', customerTotal);
+        return {
+          ...customer,
+          orders,
+          totalAmount: customerTotal
+        };
+      });
+
+      // Check for existing bills
+      const sessionBills = await apiRequest({
+        method: 'GET',
+        url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}/bills`
+      });
+
+      // Add bill status to customers
+      const customersWithBillStatus = customersWithOrders.map((customer: Customer) => ({
+        ...customer,
+        existingBill: sessionBills.find((bill: any) => bill.customerId === customer.id),
+        hasExistingBill: sessionBills.some((bill: any) => bill.customerId === customer.id)
+      }));
+
+      setTableSession({
+        ...sessionData,
+        customers: customersWithBillStatus
+      });
+      
+      // Set default selected customers based on split type
+      if (sessionData.splitType === 'individual') {
+        setSelectedCustomers([]);
+      } else if (sessionData.splitType === 'combined') {
+        setSelectedCustomers(customersWithOrders.map((c: Customer) => c.id));
+      }
+
+      // When selecting customers in custom mode, don't select ones with existing bills
+      if (sessionData.splitType === 'custom') {
+        const eligibleCustomers = customersWithBillStatus
+          .filter((c: Customer) => !c.hasExistingBill)
+          .map((c: Customer) => c.id);
+        setSelectedCustomers(eligibleCustomers);
+      }
+    } catch (error: any) {
+      // Detect 404
+      if (error?.response?.status === 404) {
         toast({
-          title: "Error",
-          description: "Failed to load table session data",
+          title: "Session Ended",
+          description: "This session no longer exists or has ended. The list will refresh.",
           variant: "destructive"
         });
+        onOpenChange(false); // Close dialog
+        if (typeof (window as any).refreshSessions === "function") (window as any).refreshSessions();
+        return;
       }
-    };
-
-    fetchTableSession();
-  }, [tableSessionId, restaurantId, toast, onOpenChange]);
+      console.error('Error fetching table session:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load table session data",
+        variant: "destructive"
+      });
+    }
+  };
 
   const calculateTotal = (customerIds: number[]) => {
     if (!tableSession || !tableSession.customers) return 0;
@@ -410,6 +408,7 @@ export function BillGenerationDialog({
       }
 
       onBillGenerated?.();
+      fetchBills(true);
       onOpenChange(false);
       if (typeof (window as any).refreshSessions === "function") (window as any).refreshSessions();
 
