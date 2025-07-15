@@ -53,13 +53,19 @@ export default function CustomerEntry() {
       toast({ title: "Error", description: "Name is required", variant: "destructive" });
       return;
     }
+    const parsedTableNumber = Number(tableNumber);
+    if (!parsedTableNumber || isNaN(parsedTableNumber)) {
+      toast({ title: "Error", description: "Invalid table number.", variant: "destructive" });
+      setIsSubmitting(false);
+      return;
+    }
     setIsSubmitting(true);
     try {
       // Check for existing active session
-      const existingSessionsResponse = await fetch(`/api/public/restaurants/${restaurantId}/table-sessions?tableId=${tableNumber}`);
+      const existingSessionsResponse = await fetch(`/api/public/restaurants/${restaurantId}/table-sessions?tableId=${parsedTableNumber}`);
       if (existingSessionsResponse.ok) {
         const existingSessions = await existingSessionsResponse.json();
-        const activeSession = existingSessions.find((s: any) => s.tableId === parseInt(tableNumber!) && ['waiting', 'active'].includes(s.status));
+        const activeSession = existingSessions.find((s: any) => s.tableId === parsedTableNumber && ['waiting', 'active'].includes(s.status));
         if (activeSession) {
           // Join existing session
           const customerResponse = await fetch(`/api/public/restaurants/${restaurantId}/customers`, {
@@ -90,8 +96,7 @@ export default function CustomerEntry() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          tableId: parseInt(tableNumber!),
-          tableNumber: tableNumber,
+          tableNumber: parsedTableNumber,
           partySize: 1,
           status: "waiting",
         }),
