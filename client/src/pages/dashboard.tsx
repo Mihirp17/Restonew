@@ -376,7 +376,7 @@ export default function Dashboard() {
 
         {/* Tables Overview and Menu Items */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <TablesOverview restaurantId={restaurantId} />
+          <TablesOverview restaurantId={restaurantId} waiterRequests={waiterRequests} />
           <PopularItems restaurantId={restaurantId} dateRange={dateRange} />
         </div>
       </div>
