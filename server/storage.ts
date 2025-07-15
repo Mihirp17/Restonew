@@ -15,7 +15,7 @@ import {
   type ApplicationFeedback, type InsertApplicationFeedback, applicationFeedback
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, sql, inArray, lt } from "drizzle-orm";
+import { eq, and, desc, sql, inArray, lt, ne } from "drizzle-orm";
 import bcrypt from 'bcryptjs';
 
 // Generic storage interface with all required methods
@@ -347,28 +347,71 @@ export class DatabaseStorage implements IStorage {
     return order;
   }
 
-  async getOrdersByRestaurantId(restaurantId: number, options: { startDate?: Date, endDate?: Date } = {}): Promise<Order[]> {
+  async getOrdersByRestaurantId(restaurantId: number, options: { startDate?: Date, endDate?: Date } = {}): Promise<any[]> {
     const { startDate, endDate } = options;
     const conditions = [eq(orders.restaurantId, restaurantId)];
     if (startDate && endDate) {
       conditions.push(sql`${orders.createdAt} BETWEEN ${startDate} AND ${endDate}`);
     }
-    const query = db.select().from(orders).where(and(...conditions as any)).orderBy(desc(orders.createdAt));
-    return await query;
+    
+    const result = await db.select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      displayOrderNumber: orders.displayOrderNumber,
+      status: orders.status,
+      total: orders.total,
+      createdAt: orders.createdAt,
+      updatedAt: orders.updatedAt,
+      customerId: orders.customerId,
+      tableSessionId: orders.tableSessionId,
+      restaurantId: orders.restaurantId,
+      tableId: orders.tableId,
+      notes: orders.notes,
+      isGroupOrder: orders.isGroupOrder,
+      customerName: customers.name,
+      tableNumber: tables.number
+    })
+    .from(orders)
+    .leftJoin(customers, eq(orders.customerId, customers.id))
+    .leftJoin(tables, eq(orders.tableId, tables.id))
+    .where(and(...conditions as any))
+    .orderBy(desc(orders.createdAt));
+    
+    return result;
   }
 
-  async getActiveOrdersByRestaurantId(restaurantId: number, limit?: number): Promise<Order[]> {
-    // Get orders that aren't completed or cancelled
-    return await db.select()
-      .from(orders)
-      .where(
-        and(
-          eq(orders.restaurantId, restaurantId),
-          sql`${orders.status} NOT IN ('completed', 'cancelled')`
-        )
+  async getActiveOrdersByRestaurantId(restaurantId: number, limit?: number): Promise<any[]> {
+    // Get orders that aren't completed or cancelled with table and customer info
+    const result = await db.select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      displayOrderNumber: orders.displayOrderNumber,
+      status: orders.status,
+      total: orders.total,
+      createdAt: orders.createdAt,
+      updatedAt: orders.updatedAt,
+      customerId: orders.customerId,
+      tableSessionId: orders.tableSessionId,
+      restaurantId: orders.restaurantId,
+      tableId: orders.tableId,
+      notes: orders.notes,
+      isGroupOrder: orders.isGroupOrder,
+      customerName: customers.name,
+      tableNumber: tables.number
+    })
+    .from(orders)
+    .leftJoin(customers, eq(orders.customerId, customers.id))
+    .leftJoin(tables, eq(orders.tableId, tables.id))
+    .where(
+      and(
+        eq(orders.restaurantId, restaurantId),
+        sql`${orders.status} NOT IN ('completed', 'cancelled')`
       )
-      .orderBy(desc(orders.createdAt))
-      .limit(limit || 10); // Default to 10 if limit is not provided
+    )
+    .orderBy(desc(orders.createdAt))
+    .limit(limit || 10); // Default to 10 if limit is not provided
+    
+    return result;
   }
 
   async getActiveOrdersLightweight(restaurantId: number, limit?: number): Promise<any[]> {
@@ -585,8 +628,31 @@ export class DatabaseStorage implements IStorage {
     return orderItem;
   }
 
-  async getOrderItemsByOrderId(orderId: number): Promise<OrderItem[]> {
-    return await db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+  async getOrderItemsByOrderId(orderId: number): Promise<any[]> {
+    const result = await db.select({
+      id: orderItems.id,
+      quantity: orderItems.quantity,
+      price: orderItems.price,
+      orderId: orderItems.orderId,
+      menuItemId: orderItems.menuItemId,
+      customizations: orderItems.customizations,
+      createdAt: orderItems.createdAt,
+      updatedAt: orderItems.updatedAt,
+      menuItem: {
+        id: menuItems.id,
+        name: menuItems.name,
+        description: menuItems.description,
+        price: menuItems.price,
+        category: menuItems.category,
+        image: menuItems.image,
+        isAvailable: menuItems.isAvailable
+      }
+    })
+    .from(orderItems)
+    .leftJoin(menuItems, eq(orderItems.menuItemId, menuItems.id))
+    .where(eq(orderItems.orderId, orderId));
+    
+    return result;
   }
 
   async createOrderItem(orderItem: InsertOrderItem): Promise<OrderItem> {
@@ -946,10 +1012,59 @@ export class DatabaseStorage implements IStorage {
         .limit(1);
 
       if (existingSession.length > 0) {
-        // Lookup table number for error message
-        const table = await tx.select().from(tables).where(eq(tables.id, session.tableId)).limit(1);
-        const tableNumber = table[0]?.number ?? session.tableId;
-        throw new Error(`Table ${tableNumber} already has an active session`);
+        // Check if the existing session is truly active (has pending orders or unpaid bills)
+        const sessionId = existingSession[0].id;
+        
+        // Check for pending orders
+        const pendingOrders = await tx
+          .select()
+          .from(orders)
+          .where(
+            and(
+              eq(orders.tableSessionId, sessionId),
+              sql`${orders.status} NOT IN ('completed', 'cancelled')`
+            )
+          )
+          .limit(1);
+
+        // Check for unpaid bills
+        const unpaidBills = await tx
+          .select()
+          .from(bills)
+          .where(
+            and(
+              eq(bills.tableSessionId, sessionId),
+              ne(bills.status, 'paid')
+            )
+          )
+          .limit(1);
+
+        // If there are pending orders or unpaid bills, the session is truly active
+        if (pendingOrders.length > 0 || unpaidBills.length > 0) {
+          // Lookup table number for error message
+          const table = await tx.select().from(tables).where(eq(tables.id, session.tableId)).limit(1);
+          const tableNumber = table[0]?.number ?? session.tableId;
+          throw new Error(`Table ${tableNumber} already has an active session`);
+        } else {
+          // Session exists but has no pending orders or unpaid bills, so force complete it
+          await tx
+            .update(tableSessions)
+            .set({ 
+              status: 'completed',
+              endTime: new Date(),
+              updatedAt: new Date()
+            })
+            .where(eq(tableSessions.id, sessionId));
+          
+          // Update table to not occupied
+          await tx
+            .update(tables)
+            .set({ 
+              isOccupied: false,
+              updatedAt: new Date()
+            })
+            .where(eq(tables.id, session.tableId));
+        }
       }
 
       // Create session with optimistic locking

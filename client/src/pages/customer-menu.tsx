@@ -36,9 +36,11 @@ export default function CustomerMenu() {
   const [showOrderHistory, setShowOrderHistory] = useState(false);
   const [showBillView, setShowBillView] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [redirectChecked, setRedirectChecked] = useState(false);
 
   // Initialize from URL params
   useEffect(() => {
+    console.log("customer-menu: initializing from URL params", { params, restaurantId, tableNumber });
     if (params.restaurantId && params.tableId) {
       setRestaurantId(parseInt(params.restaurantId));
       setTableNumber(params.tableId);
@@ -56,16 +58,34 @@ export default function CustomerMenu() {
     }
   }, [isHydrating, restaurantId, tableNumber, customer]);
 
+  // Add a slight delay before checking for redirect to allow context to load
+  useEffect(() => {
+    if (!isHydrating) {
+      setTimeout(() => {
+        setRedirectChecked(true);
+      }, 200);
+    }
+  }, [isHydrating]);
+
   // Redirect to entry page if the customer or session is not set
   useEffect(() => {
-    if (!isHydrating && !customer && !session) {
-      navigate(`/menu/${params.restaurantId}/${params.tableId}/entry`);
+    console.log("Customer menu check:", { isHydrating, restaurantId, tableNumber, customer, redirectChecked });
+    if (!isHydrating && redirectChecked && restaurantId && tableNumber && !customer) {
+      console.log("Redirecting to entry page");
+      navigate(`/menu/${restaurantId}/${tableNumber}/entry`);
     }
-  }, [isHydrating, customer, session, params, navigate]);
+  }, [isHydrating, redirectChecked, restaurantId, tableNumber, customer, navigate]);
 
   // Fetch restaurant info using the public endpoint
   const { data: restaurantResponse, isLoading: restaurantLoading } = useQuery({
     queryKey: [`/api/public/restaurants/${restaurantId}`],
+    queryFn: async () => {
+      const response = await fetch(`/api/public/restaurants/${restaurantId}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch restaurant');
+      }
+      return response.json();
+    },
     enabled: !!restaurantId,
   });
   // Use the public restaurant data
@@ -73,6 +93,13 @@ export default function CustomerMenu() {
 
   const { data: menuResponse, isLoading: menuLoading } = useQuery({
     queryKey: [`/api/public/restaurants/${restaurantId}/menu-items`],
+    queryFn: async () => {
+      const response = await fetch(`/api/public/restaurants/${restaurantId}/menu-items`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch menu items');
+      }
+      return response.json();
+    },
     enabled: !!restaurantId,
   });
 

@@ -340,7 +340,7 @@ export default function Orders() {
                     <tr key={order.id}>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900 dark:text-gray-300">#{order.id}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">{order.customerName || 'Unknown Customer'}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">Table {order.tableId}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">Table {order.tableNumber || order.tableId}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">{order.items?.length || 0} items</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">${parseFloat(order.total).toFixed(2)}</td>
                       <td className="px-6 py-4 whitespace-nowrap">
@@ -416,7 +416,7 @@ export default function Orders() {
               
               <div className="flex justify-between items-center">
                 <span className="text-sm text-gray-500 dark:text-gray-400">Table</span>
-                <span className="font-medium">Table {selectedOrder.tableId}</span>
+                <span className="font-medium">Table {selectedOrder.tableNumber || selectedOrder.tableId}</span>
               </div>
               
               <div className="flex justify-between items-center">
@@ -505,7 +505,7 @@ export default function Orders() {
                   <span className="font-medium">Customer:</span> {selectedOrder.customerName || 'Unknown Customer'}
                 </div>
                 <div>
-                  <span className="font-medium">Table:</span> Table {selectedOrder.tableId}
+                  <span className="font-medium">Table:</span> Table {selectedOrder.tableNumber || selectedOrder.tableId}
                 </div>
               </div>
               

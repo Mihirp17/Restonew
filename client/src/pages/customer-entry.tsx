@@ -27,7 +27,16 @@ export default function CustomerEntry() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [shouldRedirect, setShouldRedirect] = useState(false);
+  const [shouldNavigate, setShouldNavigate] = useState(false);
+
+  // Navigate when customer is set and shouldNavigate is true
+  useEffect(() => {
+    if (shouldNavigate && customer && session) {
+      console.log("Customer and session are set, navigating to menu");
+      navigate(`/menu/${restaurantId}/${tableNumber}`);
+      setShouldNavigate(false);
+    }
+  }, [customer, session, shouldNavigate, navigate, restaurantId, tableNumber]);
 
   // Set context from URL params
   useEffect(() => {
@@ -40,10 +49,8 @@ export default function CustomerEntry() {
   // If already registered, redirect to menu
   useEffect(() => {
     if (!isHydrating && restaurantId && tableNumber && restaurant) {
-      // If customer is already set, redirect
-      if (localStorage.getItem("customer")) {
-        navigate(`/menu/${restaurantId}/${tableNumber}`);
-      }
+      // Always require customer entry - don't check localStorage
+      // This ensures fresh customer details are entered each time
     }
   }, [isHydrating, restaurantId, tableNumber, restaurant, navigate]);
 
@@ -56,7 +63,7 @@ export default function CustomerEntry() {
     setIsSubmitting(true);
     try {
       // Check for existing active session
-      const existingSessionsResponse = await fetch(`/api/public/restaurants/${restaurantId}/table-sessions?tableId=${tableNumber}`);
+      const existingSessionsResponse = await fetch(`/api/public/restaurants/${restaurantId}/table-sessions?tableNumber=${tableNumber}`);
       if (existingSessionsResponse.ok) {
         const existingSessions = await existingSessionsResponse.json();
         const activeSession = existingSessions.find((s: any) => s.tableId === parseInt(tableNumber!) && ['waiting', 'active'].includes(s.status));
@@ -80,8 +87,11 @@ export default function CustomerEntry() {
           const customer = await customerResponse.json();
           setSession(activeSession);
           setCustomer(customer);
-          setShouldRedirect(true);
           toast({ title: "Joined Table Session!", description: `Welcome ${name}! You've joined the table session.` });
+          
+          // Trigger navigation after context is set
+          console.log("Setting shouldNavigate to true (join session)");
+          setShouldNavigate(true);
           return;
         }
       }
@@ -129,8 +139,11 @@ export default function CustomerEntry() {
       const customer = await customerResponse.json();
       setSession(session);
       setCustomer(customer);
-      setShouldRedirect(true);
       toast({ title: "Welcome!", description: `Welcome ${name}! Your table session is ready.` });
+      
+      // Trigger navigation after context is set
+      console.log("Setting shouldNavigate to true (new session)");
+      setShouldNavigate(true);
     } catch (error: any) {
       toast({ 
         title: "Error", 
@@ -141,13 +154,6 @@ export default function CustomerEntry() {
       setIsSubmitting(false);
     }
   };
-
-  // Wait for context to update before navigating
-  useEffect(() => {
-    if (shouldRedirect && customer && session) {
-      navigate(`/menu/${restaurantId}/${tableNumber}`);
-    }
-  }, [shouldRedirect, customer, session, navigate, restaurantId, tableNumber]);
 
   if (isHydrating || !restaurant) {
     return (

@@ -13,6 +13,7 @@ interface RestaurantContextType {
   setSession: (session: TableSession) => void;
   setCustomer: (customer: Customer) => void;
   isLoading: boolean;
+  isHydrating: boolean;
 }
 
 const RestaurantContext = createContext<RestaurantContextType | undefined>(undefined);
@@ -37,9 +38,24 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
     return saved ? JSON.parse(saved) : null;
   });
 
+  const [isHydrating, setIsHydrating] = useState(true);
+
+  // Stop hydration after initial load
+  useEffect(() => {
+    setIsHydrating(false);
+  }, []);
+
   const { data: restaurant, isLoading } = useQuery({
-    queryKey: ["/api/public/restaurants", restaurantId],
+    queryKey: [`/api/public/restaurants/${restaurantId}`],
+    queryFn: async () => {
+      const response = await fetch(`/api/public/restaurants/${restaurantId}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch restaurant');
+      }
+      return response.json();
+    },
     enabled: !!restaurantId,
+    select: (data: any) => data as Restaurant | null,
   });
 
   useEffect(() => {
@@ -75,10 +91,20 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
   }, [customer]);
 
   const handleSetRestaurantId = (id: number) => {
+    // Only clear customer and session data if the restaurant actually changes
+    if (restaurantId !== id) {
+      setCustomer(null);
+      setSession(null);
+    }
     setRestaurantId(id);
   };
 
   const handleSetTableNumber = (table: string) => {
+    // Only clear customer and session data if the table actually changes
+    if (tableNumber !== table) {
+      setCustomer(null);
+      setSession(null);
+    }
     setTableNumber(table);
   };
 
@@ -87,6 +113,7 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
   };
 
   const handleSetCustomer = (newCustomer: Customer) => {
+    console.log("Setting customer in context:", newCustomer);
     setCustomer(newCustomer);
   };
 
@@ -103,6 +130,7 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
         setSession: handleSetSession,
         setCustomer: handleSetCustomer,
         isLoading,
+        isHydrating,
       }}
     >
       {children}

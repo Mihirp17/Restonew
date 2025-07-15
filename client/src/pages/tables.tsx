@@ -849,7 +849,7 @@ export default function Tables() {
                           variant="success"
                           className="shadow-sm"
                             onClick={() => handleGenerateBills(session.id)}
-                          disabled={session.status === 'waiting' || session.status === 'completed' || session.status === 'cancelled'}
+                          disabled={session.status === 'completed' || session.status === 'cancelled'}
                           >
                             {t("bills", "Bills")}
                           </Button>

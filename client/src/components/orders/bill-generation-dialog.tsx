@@ -126,9 +126,41 @@ export function BillGenerationDialog({
           method: 'GET',
           url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}/orders`
         });
+        console.log('🔍 Bill Generation Debug - All orders fetched:', allOrders);
+        console.log('🔍 Bill Generation Debug - Orders count:', allOrders?.length || 0);
+        console.log('🔍 Bill Generation Debug - Session ID:', tableSessionId);
+        console.log('🔍 Bill Generation Debug - Restaurant ID:', restaurantId);
+        
+        // If no orders found, try to get orders by restaurant and filter by customers
+        let finalOrders = allOrders;
+        if (!allOrders || allOrders.length === 0) {
+          console.log('🔍 No orders found for session, trying fallback approach...');
+          try {
+            // Get all orders for the restaurant
+            const allRestaurantOrders = await apiRequest({
+              method: 'GET',
+              url: `/api/restaurants/${restaurantId}/orders`
+            });
+            console.log('🔍 Fallback - All restaurant orders:', allRestaurantOrders?.length || 0);
+            
+            // Filter orders by customers in this session
+            const customerIds = (sessionData.customers || []).map((c: Customer) => c.id);
+            const sessionOrders = allRestaurantOrders.filter((order: any) => 
+              customerIds.includes(order.customerId)
+            );
+            console.log('🔍 Fallback - Session orders found:', sessionOrders.length);
+            console.log('🔍 Fallback - Customer IDs:', customerIds);
+            console.log('🔍 Fallback - Session orders:', sessionOrders);
+            
+            finalOrders = sessionOrders;
+          } catch (fallbackError) {
+            console.error('🔍 Fallback approach failed:', fallbackError);
+          }
+        }
+        
         // Group orders by customerId
         const ordersByCustomer: Record<number, Order[]> = {};
-        for (const order of allOrders) {
+        for (const order of finalOrders) {
           if (!ordersByCustomer[order.customerId]) ordersByCustomer[order.customerId] = [];
           ordersByCustomer[order.customerId].push(order);
         }
@@ -136,6 +168,7 @@ export function BillGenerationDialog({
         const customersWithOrders = (sessionData.customers || []).map((customer: Customer) => {
           const orders = ordersByCustomer[customer.id] || [];
           const customerTotal = orders.reduce((sum: number, order: Order) => sum + parseFloat(order.total), 0);
+          console.log(`🔍 Customer ${customer.name} - Orders:`, orders.length, 'Total:', customerTotal);
           return {
             ...customer,
             orders,
@@ -150,7 +183,7 @@ export function BillGenerationDialog({
         });
 
         // Add bill status to customers
-        const customersWithBillStatus = customersWithOrders.map(customer => ({
+        const customersWithBillStatus = customersWithOrders.map((customer: Customer) => ({
           ...customer,
           existingBill: sessionBills.find((bill: any) => bill.customerId === customer.id),
           hasExistingBill: sessionBills.some((bill: any) => bill.customerId === customer.id)
@@ -171,11 +204,11 @@ export function BillGenerationDialog({
         // When selecting customers in custom mode, don't select ones with existing bills
         if (sessionData.splitType === 'custom') {
           const eligibleCustomers = customersWithBillStatus
-            .filter(c => !c.hasExistingBill)
-            .map(c => c.id);
+            .filter((c: Customer) => !c.hasExistingBill)
+            .map((c: Customer) => c.id);
           setSelectedCustomers(eligibleCustomers);
         }
-      } catch (error) {
+      } catch (error: any) {
         // Detect 404
         if (error?.response?.status === 404) {
           toast({
@@ -541,6 +574,22 @@ export function BillGenerationDialog({
                 <CardTitle className="text-sm font-medium text-[#373643]">Bill Preview</CardTitle>
               </CardHeader>
               <CardContent>
+                {/* Check if there are any orders at all */}
+                {tableSession.customers && tableSession.customers.filter(c => c.orders?.length > 0 && c.totalAmount > 0).length === 0 ? (
+                  <div className="text-center py-8 space-y-4">
+                    <div className="text-4xl">🛒</div>
+                    <div className="space-y-2">
+                      <h3 className="font-medium text-[#373643]">No Orders Yet</h3>
+                      <p className="text-sm text-[#373643]/60">
+                        Customers haven't placed any orders yet. Bills can only be generated after orders are placed.
+                      </p>
+                    </div>
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
+                      💡 Tip: Customers can scan the QR code on their table to view the menu and place orders
+                    </div>
+                  </div>
+                ) : (
+                  <div>
                 {selectedBillType === 'individual' && (
                   <div className="space-y-4">
                     {tableSession.customers && tableSession.customers.length > 0 ? (
@@ -644,6 +693,8 @@ export function BillGenerationDialog({
                     </div>
                   </div>
                 )}
+                  </div>
+                )}
               </CardContent>
             </Card>
         </div>
@@ -657,7 +708,10 @@ export function BillGenerationDialog({
           </Button>
           <Button
             onClick={handleGenerateBills}
-            disabled={isGenerating || (selectedBillType === 'custom' && selectedCustomers.length === 0)}
+            disabled={isGenerating || 
+              (selectedBillType === 'custom' && selectedCustomers.length === 0) ||
+              (tableSession.customers && tableSession.customers.filter(c => c.orders?.length > 0 && c.totalAmount > 0).length === 0)
+            }
             variant="success"
             className="shadow-sm"
           >
