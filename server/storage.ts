@@ -525,6 +525,7 @@ export class DatabaseStorage implements IStorage {
     // Invalidate session cache when new order is created
     if (newOrder.tableSessionId) {
       await this.invalidateSessionCache(newOrder.tableSessionId);
+      await this.calculateSessionTotals(newOrder.tableSessionId); // Ensure totals are updated
     }
     
     return newOrder;
@@ -560,6 +561,7 @@ export class DatabaseStorage implements IStorage {
     // Invalidate session cache when order is updated
     if (updatedOrder?.tableSessionId) {
       await this.invalidateSessionCache(updatedOrder.tableSessionId);
+      await this.calculateSessionTotals(updatedOrder.tableSessionId); // Ensure totals are updated
     }
     
     return updatedOrder;
@@ -570,6 +572,10 @@ export class DatabaseStorage implements IStorage {
       .delete(orders)
       .where(eq(orders.id, id))
       .returning();
+    if (result.length > 0 && result[0]?.tableSessionId) {
+      await this.invalidateSessionCache(result[0].tableSessionId);
+      await this.calculateSessionTotals(result[0].tableSessionId); // Ensure totals are updated
+    }
     return result.length > 0;
   }
 
