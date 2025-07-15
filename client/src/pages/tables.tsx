@@ -36,7 +36,8 @@ import {
   Settings,
   Eye,
   DollarSign,
-  Calendar
+  Calendar,
+  Bell
 } from "lucide-react";
 
 // Form schema for table
@@ -74,6 +75,8 @@ interface TableSession {
     id: number;
     number: number;
   };
+  billRequested?: boolean;
+  billRequestedAt?: string;
 }
 
 interface Bill {
@@ -369,15 +372,83 @@ export default function Tables() {
     }
   };
 
-  const handleGenerateBills = (sessionId: number) => {
-    setSelectedSessionId(sessionId);
-    setIsBillGenerationOpen(true);
+  const handleGenerateBills = async (sessionId: number) => {
+    try {
+      // First, verify that the session exists and has valid data
+      const sessionResponse = await apiRequest({
+        method: 'GET',
+        url: `/api/restaurants/${restaurantId}/table-sessions/${sessionId}`
+      });
+      
+      if (!sessionResponse) {
+        toast({
+          title: "Session Not Found",
+          description: "The selected session no longer exists or has ended.",
+          variant: "destructive"
+        });
+        // Refresh the sessions list
+        const updatedSessions = await apiRequest({
+          method: 'GET',
+          url: `/api/restaurants/${restaurantId}/table-sessions`
+        });
+        const activeAndWaitingSessions = updatedSessions.filter((session: TableSession) => 
+          session.status === 'active' || session.status === 'waiting'
+        );
+        setTableSessions(activeAndWaitingSessions);
+        return;
+      }
+      
+      setSelectedSessionId(sessionId);
+      setIsBillGenerationOpen(true);
+    } catch (error: any) {
+      console.error('Error verifying session:', error);
+      let errorMessage = "Failed to load session data";
+      
+      if (error?.response?.status === 404) {
+        errorMessage = "Session no longer exists or has ended";
+        // Refresh the sessions list
+        try {
+          const updatedSessions = await apiRequest({
+            method: 'GET',
+            url: `/api/restaurants/${restaurantId}/table-sessions`
+          });
+          const activeAndWaitingSessions = updatedSessions.filter((session: TableSession) => 
+            session.status === 'active' || session.status === 'waiting'
+          );
+          setTableSessions(activeAndWaitingSessions);
+        } catch (refreshError) {
+          console.error('Error refreshing sessions:', refreshError);
+        }
+      }
+      
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive"
+      });
+    }
   };
 
   const handleBillGenerated = async () => {
     queryClient.invalidateQueries({
       queryKey: [`/api/restaurants/${restaurantId}/table-sessions/${selectedSessionId}/bills`]
     });
+    
+    // Clear bill request status when bills are generated
+    if (selectedSessionId) {
+      try {
+        await apiRequest({
+          method: 'PUT',
+          url: `/api/restaurants/${restaurantId}/table-sessions/${selectedSessionId}`,
+          data: { 
+            billRequested: false,
+            billRequestedAt: null
+          }
+        });
+      } catch (error) {
+        console.error('Error clearing bill request status:', error);
+      }
+    }
     
     // Refresh bills if we're on the bills tab
     if (activeTab === 'bills' && restaurantId) {
@@ -423,6 +494,16 @@ export default function Tables() {
         setIsLoadingBills(false);
       }
     }
+    
+    // Refresh table sessions
+    const updatedSessions = await apiRequest({
+      method: 'GET',
+      url: `/api/restaurants/${restaurantId}/table-sessions`
+    });
+    const activeAndWaitingSessions = updatedSessions.filter((session: TableSession) => 
+      session.status === 'active' || session.status === 'waiting'
+    );
+    setTableSessions(activeAndWaitingSessions);
     
     toast({
       title: "Bills Generated",
@@ -551,7 +632,8 @@ export default function Tables() {
     }
   };
 
-  const getSessionStatusColor = (status: string) => {
+  const getSessionStatusColor = (status: string, billRequested?: boolean) => {
+    if (billRequested) return 'bg-orange-100 text-orange-800 border-orange-200';
     switch (status) {
       case 'active': return 'bg-green-100 text-green-800 border-green-200';
       case 'waiting': return 'bg-blue-100 text-blue-800 border-blue-200';
@@ -563,7 +645,8 @@ export default function Tables() {
     }
   };
 
-  const getSessionStatusText = (status: string) => {
+  const getSessionStatusText = (status: string, billRequested?: boolean) => {
+    if (billRequested) return 'Bill Requested';
     switch (status) {
       case 'active': return 'Active (Ordered)';
       case 'waiting': return 'Waiting (Browsing)';
@@ -830,6 +913,36 @@ export default function Tables() {
               </div>
             ) : tableSessions && tableSessions.length > 0 ? (
               <div className="space-y-4">
+                {/* Show bill requests at the top */}
+                {tableSessions.filter(session => session.billRequested).length > 0 && (
+                  <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 mb-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="font-medium text-orange-800 flex items-center">
+                        <Bell className="h-4 w-4 mr-2" />
+                        Bill Requests ({tableSessions.filter(session => session.billRequested).length})
+                      </h4>
+                      <Badge className="bg-orange-100 text-orange-800 border-orange-200">
+                        Action Required
+                      </Badge>
+                    </div>
+                    <p className="text-sm text-orange-700 mb-3">
+                      The following tables have requested their bills. Please generate bills for them.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {tableSessions.filter(session => session.billRequested).map(session => (
+                        <Button
+                          key={session.id}
+                          size="sm"
+                          onClick={() => handleGenerateBills(session.id)}
+                          className="bg-orange-600 hover:bg-orange-700 text-white"
+                        >
+                          Table {session.table?.number} - Generate Bills
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
                 {tableSessions.map(session => session && (
                   <Card key={session.id} className="bg-[#ffffff] border border-[#373643]/10 shadow-sm rounded-xl p-4">
                     <div className="flex items-center justify-between mb-2">
@@ -838,9 +951,14 @@ export default function Tables() {
                         <span className="text-base font-medium text-[#373643]">
                               {t("table", "Table")} {session.table?.number || t("unknown", "Unknown")}
                             </span>
-                        <Badge className="bg-green-50 text-green-700 border-green-100 text-xs font-normal px-2 py-0.5">
-                              {getSessionStatusText(session.status)}
-                            </Badge>
+                        <Badge className={`text-xs font-normal px-2 py-0.5 ${getSessionStatusColor(session.status, session.billRequested)}`}>
+                              {getSessionStatusText(session.status, session.billRequested)}
+                        </Badge>
+                        {session.billRequested && (
+                          <Badge className="bg-orange-100 text-orange-800 border-orange-200 text-xs animate-pulse">
+                            🔔 Bill Requested
+                          </Badge>
+                        )}
                         <span className="text-xs text-[#373643]/60">{getSessionDuration(session.startTime)}</span>
                           </div>
                       <div className="flex gap-2">

@@ -8,7 +8,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRestaurant } from "@/contexts/RestaurantContext";
 import { useToast } from "@/hooks/use-toast";
 import { Download, Printer, Receipt, CreditCard, Users, User, Calculator, Bell } from "lucide-react";
-import { BillGenerationDialog } from "@/components/orders/bill-generation-dialog";
 import BillRequestModal from "./BillRequestModal";
 
 interface BillViewProps {
@@ -60,7 +59,6 @@ export default function BillView({ open, onOpenChange }: BillViewProps) {
   const { toast } = useToast();
   const [bills, setBills] = useState<Bill[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [showBillGeneration, setShowBillGeneration] = useState(false);
   const [showBillRequest, setShowBillRequest] = useState(false);
   const [selectedTab, setSelectedTab] = useState<'my-bills' | 'table-bills'>('my-bills');
 
@@ -282,7 +280,7 @@ Thank you for dining with us!
           <Button variant="outline" size="sm" onClick={() => handleDownload(bill)} className="flex-1 rounded-lg">
             <Download className="h-4 w-4 mr-2" /> Download
           </Button>
-          {bill.status === 'pending' && bill.customerId === customer?.id && (
+          {bill.status === 'pending' && bill.customerId === customer?.id && false && (
             <Button size="sm" onClick={() => markBillAsPaid(bill.id)} className="flex-1 bg-[#ba1d1d] text-white rounded-lg hover:bg-[#a11414]">
               <CreditCard className="h-4 w-4 mr-2" /> Pay
             </Button>
@@ -343,8 +341,8 @@ Thank you for dining with us!
                     <div className="text-center py-8">
                       <Users className="h-12 w-12 mx-auto text-gray-400 mb-4" />
                       <p className="text-gray-500 mb-4">No table bills found</p>
-                      <Button onClick={() => setShowBillGeneration(true)} variant="outline" className="rounded-lg border-[#ba1d1d] text-[#ba1d1d] hover:bg-[#f9eaea]">
-                        <Calculator className="h-4 w-4 mr-2" /> Generate Bills
+                      <Button onClick={() => setShowBillRequest(true)} className="bg-[#ba1d1d] text-white rounded-lg hover:bg-[#a11414]">
+                        <Bell className="h-4 w-4 mr-2" /> Request Bill
                       </Button>
                     </div>
                   ) : (
@@ -357,27 +355,14 @@ Thank you for dining with us!
 
           <DialogFooter className="p-4">
             <Button variant="outline" onClick={() => onOpenChange(false)} className="rounded-lg">Close</Button>
-            {session && bills.length > 0 && (
-              <Button onClick={() => setShowBillGeneration(true)} className="bg-[#ba1d1d] text-white rounded-lg hover:bg-[#a11414]">
-                <Calculator className="h-4 w-4 mr-2" /> Manage Bills
+            {session && (
+              <Button onClick={() => setShowBillRequest(true)} className="bg-[#ba1d1d] text-white rounded-lg hover:bg-[#a11414]">
+                <Bell className="h-4 w-4 mr-2" /> Request Bill
               </Button>
             )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {showBillGeneration && session && restaurantId && (
-        <BillGenerationDialog
-          isOpen={showBillGeneration}
-          onOpenChange={setShowBillGeneration}
-          tableSessionId={session.id}
-          restaurantId={restaurantId}
-          onBillGenerated={() => {
-            fetchBills();
-            setShowBillGeneration(false);
-          }}
-        />
-      )}
 
       <BillRequestModal open={showBillRequest} onOpenChange={setShowBillRequest} />
     </>

@@ -215,6 +215,7 @@ app.use('/api/', validateRequest);
     }
 
     // Schedule session cleanup every 30 minutes with improved error handling
+    // Only run cleanup during off-peak hours to avoid conflicts with bill generation
     const cleanupJob = cron.schedule('*/30 * * * *', async () => {
       console.log('[CRON] Starting session cleanup job...');
       const startTime = Date.now();
@@ -222,10 +223,10 @@ app.use('/api/', validateRequest);
       try {
         // Add a timeout to prevent the job from running too long
         const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('Cleanup job timeout')), 60000); // 1 minute timeout
+          setTimeout(() => reject(new Error('Cleanup job timeout')), 120000); // 2 minute timeout
         });
         
-        const cleanupPromise = storage.cleanupEmptySessions(30);
+        const cleanupPromise = storage.cleanupEmptySessions(45); // Increased from 30 to 45 minutes
         
         const result = await Promise.race([cleanupPromise, timeoutPromise]) as { removedSessions: number, removedCustomers: number };
         

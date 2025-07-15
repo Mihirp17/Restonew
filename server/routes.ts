@@ -305,6 +305,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: 'Invalid ID' });
       }
 
+      // Set cache-control headers to prevent caching
+      res.set({
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      });
+
       const tableSession = await storage.getTableSession(sessionId);
       if (!tableSession) {
         return res.status(404).json({ message: 'Table session not found' });
@@ -987,7 +994,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Public mark bill as paid
-  app.post('/api/public/restaurants/:restaurantId/bills/:billId/pay', async (req, res) => {
+  app.post('/api/restaurants/:restaurantId/bills/:billId/pay', authenticate, authorizeRestaurant, async (req, res) => {
     try {
       const restaurantId = parseInt(req.params.restaurantId);
       const billId = parseInt(req.params.billId);
@@ -2368,6 +2375,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (isNaN(restaurantId) || isNaN(tableSessionId)) {
         return res.status(400).json({ message: 'Invalid restaurant or table session ID' });
       }
+      
+      // Set cache-control headers to prevent caching
+      res.set({
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      });
+      
       const orders = await storage.getOrdersByTableSessionId(tableSessionId);
       return res.json(orders);
     } catch (error) {
@@ -2689,30 +2704,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/restaurants/:restaurantId/bills', authenticate, authorizeRestaurant, async (req, res, next) => {
     try {
       const restaurantId = parseInt(req.params.restaurantId);
-      
       if (isNaN(restaurantId)) {
         return res.status(400).json({ message: 'Invalid restaurant ID' });
       }
 
       // Validate with shared schema
       const validation = validateData(billSchema, req.body);
-      
       if (!validation.success) {
         return res.status(400).json({ 
           message: 'Invalid bill data', 
           errors: validation.errors 
         });
       }
-
-      const validatedData = validation.data;
       
+      if (!validation.data) {
+        return res.status(400).json({ message: 'No data provided' });
+      }
+      
+      const validatedData = validation.data;
+
+      // --- PATCH START: Always calculate bill total from orders ---
+      const tableSessionId = validatedData.tableSessionId;
+      const customerId = validatedData.customerId;
+      const type = validatedData.type;
+      const selectedCustomerIds = req.body.selectedCustomerIds; // This is not part of the schema but sent from frontend
+      
+      // Fetch all orders for the session
+      const orders = await storage.getOrdersByTableSessionId(tableSessionId);
+      let relevantOrders;
+      if (type === 'individual') {
+        relevantOrders = orders.filter(order => order.customerId === customerId);
+      } else if (type === 'combined') {
+        relevantOrders = orders;
+      } else if (type === 'partial' && Array.isArray(selectedCustomerIds)) {
+        relevantOrders = orders.filter(order => selectedCustomerIds.includes(order.customerId));
+      } else {
+        return res.status(400).json({ message: 'Invalid bill type or missing customer selection' });
+      }
+      const subtotal = relevantOrders.reduce((sum, order) => sum + parseFloat(order.total), 0);
+      if (subtotal === 0) {
+        return res.status(400).json({ message: 'Cannot generate bill: no orders found for selection' });
+      }
+      // --- PATCH END ---
+
       // Helper function to generate a bill number
       const generateBillNumber = () => {
         const timestamp = Date.now();
         const random = Math.floor(Math.random() * 1000);
         return `BILL-${timestamp}-${random}`;
       };
-      
+
       // Check if bill already exists for this customer and session (for individual bills)
       if (validatedData && validatedData.customerId) {
         const existingBill = await storage.getBillByCustomerAndSession(validatedData.customerId, validatedData.tableSessionId);
@@ -2727,6 +2768,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const bill = await storage.createBill({
         ...validatedData,
+        subtotal: subtotal.toFixed(2),
+        total: subtotal.toFixed(2),
         billNumber: validatedData.billNumber || generateBillNumber(),
         status: validatedData.status || 'pending',
         tax: validatedData.tax || '0.00',

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,6 +35,7 @@ interface Customer {
   paymentStatus: string;
   orders: Order[];
   totalAmount: number;
+  hasOrders?: boolean;
   hasExistingBill?: boolean;
   existingBill?: {
     id: number;
@@ -74,6 +75,8 @@ export function BillGenerationDialog({
   const [selectedBillType, setSelectedBillType] = useState<'individual' | 'combined' | 'custom'>('individual');
   const [selectedCustomers, setSelectedCustomers] = useState<number[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [hasError, setHasError] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
 
   // Add state for paginated bills
@@ -102,135 +105,170 @@ export function BillGenerationDialog({
   // Fetch bills on dialog open or session change
   useEffect(() => {
     if (isOpen) {
+      setHasError(false); // Reset error state
+      setIsLoading(true); // Start loading
       setBills([]);
       setBillsOffset(0);
       setBillsHasMore(true);
       fetchBills(true);
+      // Always fetch latest session/orders
+      fetchTableSession();
     }
     // eslint-disable-next-line
   }, [isOpen, tableSessionId, restaurantId]);
 
   // Fetch table session data
-  useEffect(() => {
-    const fetchTableSession = async () => {
-      if (!tableSessionId || !restaurantId) return;
+  const fetchTableSession = async () => {
+    if (!tableSessionId || !restaurantId) return;
 
-      try {
-        const sessionData = await apiRequest({
-          method: 'GET',
-          url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}`
-        });
-        
-        // Fetch all orders for the session in one call
-        const allOrders = await apiRequest({
-          method: 'GET',
-          url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}/orders`
-        });
-        console.log('🔍 Bill Generation Debug - All orders fetched:', allOrders);
-        console.log('🔍 Bill Generation Debug - Orders count:', allOrders?.length || 0);
-        console.log('🔍 Bill Generation Debug - Session ID:', tableSessionId);
-        console.log('🔍 Bill Generation Debug - Restaurant ID:', restaurantId);
-        
-        // If no orders found, try to get orders by restaurant and filter by customers
-        let finalOrders = allOrders;
-        if (!allOrders || allOrders.length === 0) {
-          console.log('🔍 No orders found for session, trying fallback approach...');
-          try {
-            // Get all orders for the restaurant
-            const allRestaurantOrders = await apiRequest({
-              method: 'GET',
-              url: `/api/restaurants/${restaurantId}/orders`
-            });
-            console.log('🔍 Fallback - All restaurant orders:', allRestaurantOrders?.length || 0);
-            
-            // Filter orders by customers in this session
-            const customerIds = (sessionData.customers || []).map((c: Customer) => c.id);
-            const sessionOrders = allRestaurantOrders.filter((order: any) => 
-              customerIds.includes(order.customerId)
-            );
-            console.log('🔍 Fallback - Session orders found:', sessionOrders.length);
-            console.log('🔍 Fallback - Customer IDs:', customerIds);
-            console.log('🔍 Fallback - Session orders:', sessionOrders);
-            
-            finalOrders = sessionOrders;
-          } catch (fallbackError) {
-            console.error('🔍 Fallback approach failed:', fallbackError);
-          }
+    try {
+      const sessionData = await apiRequest({
+        method: 'GET',
+        url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}?t=${Date.now()}&cacheBust=${Math.random()}`,
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
         }
-        
-        // Group orders by customerId
-        const ordersByCustomer: Record<number, Order[]> = {};
-        for (const order of finalOrders) {
-          if (!ordersByCustomer[order.customerId]) ordersByCustomer[order.customerId] = [];
-          ordersByCustomer[order.customerId].push(order);
+      });
+      
+      console.log('🔍 Bill Generation Debug - Session data:', sessionData);
+      console.log('🔍 Bill Generation Debug - Session totalAmount:', sessionData?.totalAmount);
+      
+      // Fetch all orders for the session in one call
+      const allOrders = await apiRequest({
+        method: 'GET',
+        url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}/orders?t=${Date.now()}&cacheBust=${Math.random()}`,
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
         }
-        // Attach orders and totals to each customer
-        const customersWithOrders = (sessionData.customers || []).map((customer: Customer) => {
-          const orders = ordersByCustomer[customer.id] || [];
-          const customerTotal = orders.reduce((sum: number, order: Order) => sum + parseFloat(order.total), 0);
-          console.log(`🔍 Customer ${customer.name} - Orders:`, orders.length, 'Total:', customerTotal);
-          return {
-            ...customer,
-            orders,
-            totalAmount: customerTotal
-          };
-        });
-
-        // Check for existing bills
-        const sessionBills = await apiRequest({
-          method: 'GET',
-          url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}/bills`
-        });
-
-        // Add bill status to customers
-        const customersWithBillStatus = customersWithOrders.map((customer: Customer) => ({
-          ...customer,
-          existingBill: sessionBills.find((bill: any) => bill.customerId === customer.id),
-          hasExistingBill: sessionBills.some((bill: any) => bill.customerId === customer.id)
-        }));
-
-        setTableSession({
-          ...sessionData,
-          customers: customersWithBillStatus
-        });
-        
-        // Set default selected customers based on split type
-        if (sessionData.splitType === 'individual') {
-          setSelectedCustomers([]);
-        } else if (sessionData.splitType === 'combined') {
-          setSelectedCustomers(customersWithOrders.map((c: Customer) => c.id));
-        }
-
-        // When selecting customers in custom mode, don't select ones with existing bills
-        if (sessionData.splitType === 'custom') {
-          const eligibleCustomers = customersWithBillStatus
-            .filter((c: Customer) => !c.hasExistingBill)
-            .map((c: Customer) => c.id);
-          setSelectedCustomers(eligibleCustomers);
-        }
-      } catch (error: any) {
-        // Detect 404
-        if (error?.response?.status === 404) {
-          toast({
-            title: "Session Ended",
-            description: "This session no longer exists or has ended. The list will refresh.",
-            variant: "destructive"
+      });
+      console.log('🔍 Bill Generation Debug - All orders fetched:', allOrders);
+      console.log('🔍 Bill Generation Debug - Orders count:', allOrders?.length || 0);
+      console.log('🔍 Bill Generation Debug - Session ID:', tableSessionId);
+      console.log('🔍 Bill Generation Debug - Restaurant ID:', restaurantId);
+      
+      // If no orders found, try to get orders by restaurant and filter by customers
+      let finalOrders = allOrders;
+      if (!allOrders || allOrders.length === 0) {
+        console.log('🔍 No orders found for session, trying fallback approach...');
+        try {
+          // Get all orders for the restaurant
+          const allRestaurantOrders = await apiRequest({
+            method: 'GET',
+            url: `/api/restaurants/${restaurantId}/orders`
           });
-          onOpenChange(false); // Close dialog
-          if (typeof (window as any).refreshSessions === "function") (window as any).refreshSessions();
-          return;
+          console.log('🔍 Fallback - All restaurant orders:', allRestaurantOrders?.length || 0);
+          
+          // Filter orders by customers in this session
+          const customerIds = (sessionData.customers || []).map((c: Customer) => c.id);
+          const sessionOrders = allRestaurantOrders.filter((order: any) => 
+            customerIds.includes(order.customerId)
+          );
+          console.log('🔍 Fallback - Session orders found:', sessionOrders.length);
+          console.log('🔍 Fallback - Customer IDs:', customerIds);
+          console.log('🔍 Fallback - Session orders:', sessionOrders);
+          
+          finalOrders = sessionOrders;
+        } catch (fallbackError) {
+          console.error('🔍 Fallback approach failed:', fallbackError);
         }
-        console.error('Error fetching table session:', error);
+      }
+      
+      // Group orders by customerId
+      const ordersByCustomer: Record<number, Order[]> = {};
+      for (const order of finalOrders) {
+        if (!ordersByCustomer[order.customerId]) ordersByCustomer[order.customerId] = [];
+        ordersByCustomer[order.customerId].push(order);
+      }
+      // Debug: Log session data customers
+      console.log('🔍 Session Data:', sessionData);
+      console.log('🔍 Session Data Customers:', sessionData.customers);
+      console.log('🔍 Final Orders:', finalOrders);
+      console.log('🔍 Orders by Customer:', ordersByCustomer);
+      
+      // Attach orders and totals to each customer
+      const customersWithOrders = (sessionData.customers || []).map((customer: Customer) => {
+        const orders = ordersByCustomer[customer.id] || [];
+        const customerTotal = orders.reduce((sum: number, order: Order) => sum + parseFloat(order.total), 0);
+        console.log(`🔍 Customer ${customer.name} (ID: ${customer.id}) - Orders:`, orders.length, 'Total:', customerTotal);
+        console.log(`🔍 Customer ${customer.name} - Individual orders:`, orders.map(o => ({ id: o.id, total: o.total, customerId: o.customerId })));
+        return {
+          ...customer,
+          orders,
+          totalAmount: customerTotal,
+          hasOrders: orders.length > 0 && customerTotal > 0
+        };
+      });
+
+      // Compare calculated totals with session total
+      const allCustomersTotal = customersWithOrders.reduce((sum: number, customer: any) => sum + (customer.totalAmount || 0), 0);
+      console.log(`🔍 Bill Generation Debug - All customers total: ${allCustomersTotal}`);
+      console.log(`🔍 Bill Generation Debug - Session total: ${sessionData.totalAmount}`);
+      
+      if (sessionData.totalAmount && Math.abs(allCustomersTotal - parseFloat(sessionData.totalAmount)) > 0.01) {
+        console.warn(`🚨 Total mismatch! Calculated: ${allCustomersTotal}, Session: ${sessionData.totalAmount}`);
+      }
+
+      // Check for existing bills
+      const sessionBills = await apiRequest({
+        method: 'GET',
+        url: `/api/restaurants/${restaurantId}/table-sessions/${tableSessionId}/bills`
+      });
+
+      // Add bill status to customers
+      const customersWithBillStatus = customersWithOrders.map((customer: Customer) => ({
+        ...customer,
+        existingBill: sessionBills.find((bill: any) => bill.customerId === customer.id),
+        hasExistingBill: sessionBills.some((bill: any) => bill.customerId === customer.id)
+      }));
+
+      setTableSession({
+        ...sessionData,
+        customers: customersWithBillStatus
+      });
+      
+      // Set default selected customers based on split type
+      if (sessionData.splitType === 'individual') {
+        setSelectedCustomers([]);
+      } else if (sessionData.splitType === 'combined') {
+        setSelectedCustomers(customersWithOrders.map((c: Customer) => c.id));
+      }
+
+      // When selecting customers in custom mode, don't select ones with existing bills
+      if (sessionData.splitType === 'custom') {
+        const eligibleCustomers = customersWithBillStatus
+          .filter((c: Customer) => !c.hasExistingBill)
+          .map((c: Customer) => c.id);
+        setSelectedCustomers(eligibleCustomers);
+      }
+      
+      setIsLoading(false); // Stop loading on success
+    } catch (error: any) {
+      // Detect 404
+      if (error?.response?.status === 404) {
         toast({
-          title: "Error",
-          description: "Failed to load table session data",
+          title: "Session Ended",
+          description: "This session no longer exists or has ended. The list will refresh.",
           variant: "destructive"
         });
+        onOpenChange(false); // Close dialog immediately
+        if (typeof (window as any).refreshSessions === "function") (window as any).refreshSessions();
+        return;
       }
-    };
-
-    fetchTableSession();
-  }, [tableSessionId, restaurantId, toast, onOpenChange]);
+      console.error('Error fetching table session:', error);
+      setHasError(true);
+      setIsLoading(false); // Stop loading on error
+      toast({
+        title: "Error",
+        description: "Failed to load table session data. Please check the session or try again.",
+        variant: "destructive"
+      });
+      onOpenChange(false); // Close dialog immediately for other errors too
+    }
+  };
 
   const calculateTotal = (customerIds: number[]) => {
     if (!tableSession || !tableSession.customers) return 0;
@@ -269,7 +307,7 @@ export function BillGenerationDialog({
     
     // Check if there are any orders at all
     const customersWithOrders = tableSession.customers.filter(customer => 
-      customer.orders?.length > 0 && customer.totalAmount > 0
+      customer.orders?.length > 0 && customer.totalAmount > 0 && customer.hasOrders
     );
     
     if (customersWithOrders.length === 0) {
@@ -291,8 +329,8 @@ export function BillGenerationDialog({
         
         for (const customer of tableSession.customers) {
           // Skip customers with no orders or zero total
-          if (customer.totalAmount <= 0 || !customer.orders?.length) {
-            console.log(`Skipping bill for ${customer.name} - no orders`);
+          if (customer.totalAmount <= 0 || !customer.orders?.length || !customer.hasOrders) {
+            console.log(`Skipping bill for ${customer.name} - no orders or zero total`);
             continue;
           }
 
@@ -410,6 +448,12 @@ export function BillGenerationDialog({
       }
 
       onBillGenerated?.();
+      fetchBills(true);
+      
+      // Note: Auto-completion should only happen when bills are actually PAID, not just generated
+      // Bills are created with 'pending' status and should remain that way until payment
+      // The auto-completion will be handled by a separate payment process or webhook
+      
       onOpenChange(false);
       if (typeof (window as any).refreshSessions === "function") (window as any).refreshSessions();
 
@@ -455,15 +499,78 @@ export function BillGenerationDialog({
 
 
 
+  // Show loading state
+  if (isLoading) {
+    return (
+      <Dialog open={isOpen} onOpenChange={onOpenChange}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Loading Table Session</DialogTitle>
+            <DialogDescription>
+              Please wait while we load the table session data...
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col items-center justify-center p-8">
+            <div className="text-center">
+              <div className="text-lg text-[#373643] mb-2">Loading...</div>
+              <p className="mb-4 text-[#373643]/70">
+                Loading table session data...
+              </p>
+              <div className="animate-pulse w-8 h-8 bg-[#ba1d1d] rounded-full mx-auto"></div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  // Show error state
+  if (hasError) {
+    return (
+      <Dialog open={isOpen} onOpenChange={onOpenChange}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Error Loading Session</DialogTitle>
+            <DialogDescription>
+              There was an error loading the table session data. Please try again.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col items-center justify-center p-8">
+            <div className="text-center">
+              <div className="text-2xl text-[#ba1d1d] mb-2">Error</div>
+              <p className="mb-4 text-[#373643]">
+                Failed to load table session data. Please check the session or try again.
+              </p>
+              <Button onClick={() => onOpenChange(false)} className="bg-[#ba1d1d] text-white hover:bg-[#a11414]">
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  // Show message if no session data
   if (!tableSession) {
     return (
       <Dialog open={isOpen} onOpenChange={onOpenChange}>
         <DialogContent>
+          <DialogHeader>
+            <DialogTitle>No Session Data</DialogTitle>
+            <DialogDescription>
+              No table session data is available for this request.
+            </DialogDescription>
+          </DialogHeader>
           <div className="flex flex-col items-center justify-center p-8">
             <div className="text-center">
-              <div className="text-2xl text-[#ba1d1d] mb-2">Error</div>
-              <p className="mb-4 text-[#373643]">Failed to load table session data. Please check the session or try again.</p>
-              <Button onClick={() => onOpenChange(false)} className="bg-[#ba1d1d] text-white hover:bg-[#a11414]">Cancel</Button>
+              <div className="text-lg text-[#373643] mb-2">No Data</div>
+              <p className="mb-4 text-[#373643]/70">
+                No table session data available.
+              </p>
+              <Button onClick={() => onOpenChange(false)} className="bg-[#ba1d1d] text-white hover:bg-[#a11414]">
+                Close
+              </Button>
             </div>
           </div>
         </DialogContent>
@@ -575,7 +682,7 @@ export function BillGenerationDialog({
               </CardHeader>
               <CardContent>
                 {/* Check if there are any orders at all */}
-                {tableSession.customers && tableSession.customers.filter(c => c.orders?.length > 0 && c.totalAmount > 0).length === 0 ? (
+                {tableSession.customers && tableSession.customers.filter(c => c.orders?.length > 0 && c.totalAmount > 0 && c.hasOrders).length === 0 ? (
                   <div className="text-center py-8 space-y-4">
                     <div className="text-4xl">🛒</div>
                     <div className="space-y-2">
@@ -598,7 +705,8 @@ export function BillGenerationDialog({
 
                         return (
                           <div key={customer.id} className={`p-4 border rounded-lg ${
-                            customer.hasExistingBill ? 'bg-gray-50 border-gray-300' : 'border-green-200 bg-green-50'
+                            customer.hasExistingBill ? 'bg-gray-50 border-gray-300' : 
+                            customer.hasOrders ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'
                           }`}>
                             <div className="flex items-center justify-between mb-2">
                               <div className="flex items-center space-x-2">
@@ -612,6 +720,11 @@ export function BillGenerationDialog({
                                     {customer.existingBill?.status === 'paid' ? '✓ Bill Paid' : '⏳ Bill Pending'}
                                   </div>
                                 )}
+                                {!customer.hasOrders && !customer.hasExistingBill && (
+                                  <div className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-600">
+                                    No Orders
+                                  </div>
+                                )}
                               </div>
                               <span className="font-bold">{formatCurrency(total)}</span>
                             </div>
@@ -620,9 +733,14 @@ export function BillGenerationDialog({
                                 <span>Total (VAT included):</span>
                                 <span>{formatCurrency(total)}</span>
                               </div>
-                              {customer.hasExistingBill && (
+                                {customer.hasExistingBill && (
                                 <div className="text-xs text-gray-600 mt-2">
                                   Bill #{customer.existingBill?.billNumber?.split('-').pop()} already exists
+                                </div>
+                              )}
+                              {!customer.hasOrders && !customer.hasExistingBill && (
+                                <div className="text-xs text-gray-600 mt-2">
+                                  Customer has not placed any orders
                                 </div>
                               )}
                             </div>
@@ -710,7 +828,7 @@ export function BillGenerationDialog({
             onClick={handleGenerateBills}
             disabled={isGenerating || 
               (selectedBillType === 'custom' && selectedCustomers.length === 0) ||
-              (tableSession.customers && tableSession.customers.filter(c => c.orders?.length > 0 && c.totalAmount > 0).length === 0)
+              (tableSession.customers && tableSession.customers.filter(c => c.orders?.length > 0 && c.totalAmount > 0 && c.hasOrders).length === 0)
             }
             variant="success"
             className="shadow-sm"

@@ -15,7 +15,7 @@ import {
   type ApplicationFeedback, type InsertApplicationFeedback, applicationFeedback
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, sql, inArray, lt, ne } from "drizzle-orm";
+import { eq, and, desc, sql, inArray, lt, ne, or, isNull } from "drizzle-orm";
 import bcrypt from 'bcryptjs';
 
 // Generic storage interface with all required methods
@@ -106,7 +106,7 @@ export interface IStorage {
   updateAiInsightStatus(insightId: number, status: string): Promise<void>;
 
   // Table Session Methods
-  getTableSession(id: number): Promise<TableSession | undefined>;
+  getTableSession(id: number): Promise<any>;
   getTableSessionsByRestaurantId(restaurantId: number, status?: string): Promise<any[]>;
   createTableSession(session: InsertTableSession): Promise<TableSession>;
   updateTableSession(id: number, session: Partial<InsertTableSession>): Promise<TableSession | undefined>;
@@ -956,9 +956,26 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Table Session Methods
-  async getTableSession(id: number): Promise<TableSession | undefined> {
+  async getTableSession(id: number): Promise<any> {
+    console.log(`[Storage] getTableSession called with id: ${id}`);
     const [session] = await db.select().from(tableSessions).where(eq(tableSessions.id, id));
-    return session;
+    
+    if (!session) {
+      console.log(`[Storage] No session found for id: ${id}`);
+      return undefined;
+    }
+
+    // Enrich the session with customers and table data (same as getTableSessionsByRestaurantId)
+    const customers = await this.getCustomersByTableSessionId(session.id);
+    const table = await this.getTable(session.tableId);
+    
+    console.log(`[Storage] Session ${id} enriched with ${customers.length} customers and table ${table?.id}`);
+    
+    return {
+      ...session,
+      customers,
+      table
+    };
   }
 
   async getTableSessionsByRestaurantId(restaurantId: number, status?: string): Promise<any[]> {
@@ -1613,14 +1630,10 @@ export class DatabaseStorage implements IStorage {
   private readonly CACHE_TTL = 30000; // 30 seconds cache TTL
 
   async calculateSessionTotals(tableSessionId: number): Promise<void> {
-    // Check cache first
-    const cached = this.sessionTotalsCache.get(tableSessionId);
-    const now = Date.now();
+    // Clear cache first to ensure fresh calculation
+    this.sessionTotalsCache.delete(tableSessionId);
     
-    if (cached && (now - cached.lastUpdated) < this.CACHE_TTL) {
-      console.log(`[Storage] Using cached session totals for session ${tableSessionId}`);
-      return;
-    }
+    console.log(`[Storage] Calculating totals for session ${tableSessionId}`);
 
     // Use transaction for consistency
     await this.withTransaction(async (tx) => {
@@ -1630,6 +1643,8 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(orders)
       .where(eq(orders.tableSessionId, tableSessionId));
+    
+    console.log(`[Storage] Found ${sessionOrders.length} orders for session ${tableSessionId}`);
     
     // Calculate total from orders
     const orderTotal = sessionOrders.reduce((sum: number, order: { total: string }) => sum + parseFloat(order.total), 0);
@@ -1648,6 +1663,8 @@ export class DatabaseStorage implements IStorage {
       totalAmount: orderTotal.toString(),
       paidAmount: paidAmount.toString()
     };
+
+        console.log(`[Storage] Session ${tableSessionId} calculated totals: ${totals.totalAmount} total, ${totals.paidAmount} paid`);
 
         // Get current session to check if totals changed
         const [currentSession] = await tx
@@ -1670,9 +1687,12 @@ export class DatabaseStorage implements IStorage {
             .where(eq(tableSessions.id, tableSessionId));
           
       console.log(`[Storage] Updated session ${tableSessionId} totals: ${totals.totalAmount} total, ${totals.paidAmount} paid`);
+    } else {
+      console.log(`[Storage] Session ${tableSessionId} totals unchanged`);
     }
 
     // Cache the result
+    const now = Date.now();
     this.sessionTotalsCache.set(tableSessionId, {
       totals,
       lastUpdated: now
@@ -1759,19 +1779,27 @@ export class DatabaseStorage implements IStorage {
 
     try {
       // Get all sessions that are older than the timeout and are in waiting/active status
+      // BUT exclude sessions where bills have been requested
       const oldSessions = await db
         .select()
         .from(tableSessions)
         .where(
           and(
             inArray(tableSessions.status, ['waiting', 'active']),
-            lt(tableSessions.createdAt, cutoffTime)
+            lt(tableSessions.createdAt, cutoffTime),
+            or(
+              eq(tableSessions.billRequested, false),
+              isNull(tableSessions.billRequested)
+            )
           )
         );
 
       if (oldSessions.length === 0) {
+        console.log('[Storage] No sessions found for cleanup');
         return { removedSessions: 0, removedCustomers: 0 };
       }
+
+      console.log(`[Storage] Found ${oldSessions.length} sessions older than ${timeoutMinutes} minutes for potential cleanup`);
 
       const sessionIds = oldSessions.map(s => s.id);
 
@@ -1781,15 +1809,23 @@ export class DatabaseStorage implements IStorage {
         .from(orders)
         .where(inArray(orders.tableSessionId, sessionIds));
 
-      // Create a set of session IDs that have orders
-      const sessionsWithOrders = new Set(sessionOrders.map(o => o.tableSessionId));
+      // Get all bills for these sessions to avoid deleting sessions with bills
+      const sessionBills = await db
+        .select({ tableSessionId: bills.tableSessionId })
+        .from(bills)
+        .where(inArray(bills.tableSessionId, sessionIds));
 
-      // Separate sessions into those with orders and those without
-      const sessionsToDelete = oldSessions.filter(s => !sessionsWithOrders.has(s.id));
+      // Create a set of session IDs that have orders or bills
+      const sessionsWithOrders = new Set(sessionOrders.map(o => o.tableSessionId));
+      const sessionsWithBills = new Set(sessionBills.map(b => b.tableSessionId));
+
+      // Separate sessions - only delete those with no orders AND no bills
+      const sessionsToDelete = oldSessions.filter(s => !sessionsWithOrders.has(s.id) && !sessionsWithBills.has(s.id));
       const sessionsToClean = oldSessions.filter(s => sessionsWithOrders.has(s.id));
 
       // Delete sessions that have no orders (and their customers)
       if (sessionsToDelete.length > 0) {
+        console.log(`[Storage] Deleting ${sessionsToDelete.length} empty sessions`);
         const sessionsToDeleteIds = sessionsToDelete.map(s => s.id);
         
         // Delete customers for these sessions
@@ -1799,6 +1835,7 @@ export class DatabaseStorage implements IStorage {
           .returning();
         
         removedCustomers += deletedCustomers.length;
+        console.log(`[Storage] Deleted ${deletedCustomers.length} customers from empty sessions`);
 
         // Delete the sessions
         await db
@@ -1806,10 +1843,22 @@ export class DatabaseStorage implements IStorage {
           .where(inArray(tableSessions.id, sessionsToDeleteIds));
         
         removedSessions += sessionsToDeleteIds.length;
+        console.log(`[Storage] Deleted ${sessionsToDeleteIds.length} empty sessions`);
+        
+        // Update table occupancy for deleted sessions
+        const tableIds = sessionsToDelete.map(s => s.tableId).filter(Boolean);
+        if (tableIds.length > 0) {
+          await db
+            .update(tables)
+            .set({ isOccupied: false })
+            .where(inArray(tables.id, tableIds));
+          console.log(`[Storage] Freed up ${tableIds.length} tables from deleted sessions`);
+        }
       }
 
       // For sessions with orders, remove ghost customers (customers with no orders)
       if (sessionsToClean.length > 0) {
+        console.log(`[Storage] Cleaning ghost customers from ${sessionsToClean.length} sessions with orders`);
         const sessionsToCleanIds = sessionsToClean.map(s => s.id);
         
         // Get all customers for these sessions
@@ -1840,10 +1889,12 @@ export class DatabaseStorage implements IStorage {
               .where(inArray(customers.id, ghostCustomerIds));
             
             removedCustomers += ghostCustomerIds.length;
+            console.log(`[Storage] Removed ${ghostCustomerIds.length} ghost customers`);
           }
         }
       }
 
+      console.log(`[Storage] Cleanup completed: ${removedSessions} sessions removed, ${removedCustomers} customers removed`);
       return { removedSessions, removedCustomers };
     } catch (error) {
       console.error('[Storage] Error during session cleanup:', error);
