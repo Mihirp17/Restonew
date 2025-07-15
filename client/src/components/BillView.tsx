@@ -282,7 +282,7 @@ Thank you for dining with us!
           <Button variant="outline" size="sm" onClick={() => handleDownload(bill)} className="flex-1 rounded-lg">
             <Download className="h-4 w-4 mr-2" /> Download
           </Button>
-          {bill.status === 'pending' && bill.customerId === customer?.id && (
+          {bill.status === 'pending' && bill.customerId === customer?.id && false && (
             <Button size="sm" onClick={() => markBillAsPaid(bill.id)} className="flex-1 bg-[#ba1d1d] text-white rounded-lg hover:bg-[#a11414]">
               <CreditCard className="h-4 w-4 mr-2" /> Pay
             </Button>

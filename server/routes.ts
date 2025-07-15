@@ -987,7 +987,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Public mark bill as paid
-  app.post('/api/public/restaurants/:restaurantId/bills/:billId/pay', async (req, res) => {
+  app.post('/api/restaurants/:restaurantId/bills/:billId/pay', authenticate, authorizeRestaurant, async (req, res) => {
     try {
       const restaurantId = parseInt(req.params.restaurantId);
       const billId = parseInt(req.params.billId);
