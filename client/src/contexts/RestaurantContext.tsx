@@ -42,6 +42,12 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
 
   const { data: restaurant, isLoading } = useQuery({
     queryKey: [`/api/public/restaurants/${restaurantId}`],
+    queryFn: async () => {
+      if (!restaurantId) return null;
+      const res = await fetch(`/api/public/restaurants/${restaurantId}`);
+      if (!res.ok) throw new Error('Failed to fetch restaurant');
+      return res.json();
+    },
     enabled: !!restaurantId,
   });
 
