@@ -71,16 +71,33 @@ class RestaurantAnalyzer {
       feedback,
       tables,
       staff,
-      expenses
+      expenses,
+      orderItems,
+      // New: get all customers for all sessions
+      tableSessions,
+      bills,
+      users,
+      subscription,
+      applicationFeedback,
+      aiInsights
     ] = await Promise.all([
       storage.getOrdersByRestaurantId(restaurantId),
       storage.getMenuItems(restaurantId),
       storage.getFeedbackByRestaurantId(restaurantId),
       storage.getTablesByRestaurantId(restaurantId),
-      // Handle missing methods gracefully
       Promise.resolve([]), // getStaffByRestaurantId not implemented yet
-      Promise.resolve([])  // getExpensesByRestaurantId not implemented yet
+      Promise.resolve([]), // getExpensesByRestaurantId not implemented yet
+      storage.getOrderItemsByRestaurantId(restaurantId),
+      storage.getTableSessionsByRestaurantId(restaurantId),
+      storage.getBillsByRestaurantId(restaurantId),
+      storage.getUsersByRestaurantId(restaurantId),
+      storage.getSubscriptionByRestaurantId(restaurantId),
+      storage.getApplicationFeedbackByRestaurantId(restaurantId),
+      storage.getAiInsightsByRestaurantId(restaurantId)
     ]);
+
+    // Flatten all customers from all sessions
+    const customers = tableSessions.flatMap((session: any) => session.customers || []);
 
     const now = new Date();
     const timeframes = this.getTimeframes(now, specificDate);
@@ -92,6 +109,13 @@ class RestaurantAnalyzer {
       tables,
       staff,
       expenses,
+      orderItems,
+      customers,
+      bills,
+      users,
+      subscription,
+      applicationFeedback,
+      aiInsights,
       timeframes,
       filteredOrders: this.filterOrdersByTimeframes(orders, timeframes),
       filteredFeedback: this.filterFeedbackByTimeframes(feedback, timeframes)
@@ -343,7 +367,15 @@ export async function handleRestaurantChat(message: ChatMessage): Promise<string
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
     const prompt = `
-You are an expert restaurant AI assistant. Answer the user's question with precise, actionable insights.
+You are an expert restaurant AI assistant. You have access to ALL restaurant data: orders, order items, menu items, customers, bills, tables, users/staff, feedback, subscription, application feedback, and AI insights.
+
+If the user asks for a chart, graph, or visualization, return a JSON block in your response with the following format:
+
+CHART_JSON_START
+{"chart": { "type": "bar" | "line" | "pie" | ..., "title": "...", "labels": [...], "datasets": [{ "label": "...", "data": [...] }] }}
+CHART_JSON_END
+
+Always answer the user's question with precise, actionable insights, using numbers, trends, and comparisons. Use the data provided in the context. If a chart is requested, provide both a brief explanation and the chart JSON block.
 
 Restaurant Context:
 ${JSON.stringify(enhancedContext, null, 2)}
@@ -356,19 +388,22 @@ Guidelines:
 3. Compare timeframes when relevant
 4. Provide 1-2 actionable recommendations
 5. Focus on what matters most for the business
+6. If a chart/graph is requested, include the chart JSON block as described above.
 
 Answer format:
 - Start with the direct answer
 - Include relevant metrics
+- If a chart is requested, include the chart JSON block
 - End with a brief recommendation
 
 Example patterns to handle:
 - "What's the best meal sold today?" → Show top item with quantity sold
-- "Revenue trends?" → Compare periods with percentage changes
+- "Revenue trends?" → Compare periods with percentage changes, and show a chart if requested
 - "Customer satisfaction?" → Show rating with trend
 - "Peak hours?" → Identify busiest times with order counts
 - "Staff performance?" → Based on service metrics
 - "Menu optimization?" → Highlight profitable vs popular items
+- "Show me a graph of sales this week" → Return a chart JSON block
 
 Keep responses under 150 words and actionable.
 `;
