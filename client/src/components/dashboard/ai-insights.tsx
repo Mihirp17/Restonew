@@ -26,6 +26,7 @@ import {
   Lightbulb,
   PlayCircle
 } from "lucide-react";
+import { useLang } from "@/contexts/language-context";
 
 interface AIInsight {
   id: number;
@@ -117,6 +118,7 @@ const getArchivedIds = () => JSON.parse(localStorage.getItem('aiInsightsArchived
 const setArchivedIds = (ids: number[]) => localStorage.setItem('aiInsightsArchived', JSON.stringify(ids));
 
 export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps) {
+  const { lang } = useLang();
   const [insights, setInsights] = useState<AIInsight[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -132,10 +134,11 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
 
   // Add state for feedback
   const [feedback, setFeedback] = useState<Record<number, { rating: number; reason: string }>>({});
+  const { t } = useLang();
   const feedbackOptions = [
-    'Not relevant',
-    'Already implemented',
-    'Data incorrect',
+    t('aiInsights.feedback.notRelevant', 'Not relevant'),
+    t('aiInsights.feedback.alreadyImplemented', 'Already implemented'),
+    t('aiInsights.feedback.dataIncorrect', 'Data incorrect'),
   ];
 
   // Add state for filtered insights
@@ -146,9 +149,9 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
     if (!restaurantId) return;
     try {
       setIsLoading(true);
-      let url = `/api/restaurants/${restaurantId}/ai-insights`;
+      let url = `/api/restaurants/${restaurantId}/ai-insights?lang=${lang}`;
       if (startDate && endDate) {
-        url += `?startDate=${encodeURIComponent(startDate.toISOString())}&endDate=${encodeURIComponent(endDate.toISOString())}`;
+        url += `&startDate=${encodeURIComponent(startDate.toISOString())}&endDate=${encodeURIComponent(endDate.toISOString())}`;
       }
       const response = await apiRequest('GET', url);
       const data: AIInsight[] = await response.json();
@@ -164,8 +167,8 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
     } catch (error) {
       console.error('Error fetching AI insights:', error);
       toast({
-        title: "Error",
-        description: "Failed to load AI insights",
+        title: t('error'),
+        description: t('aiInsights.error.fetch', 'Failed to load AI insights'),
         variant: "destructive"
       });
     } finally {
@@ -179,12 +182,12 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
     try {
       setIsGenerating(true);
       // Get the current number of insights before generating
-      const beforeResponse = await apiRequest('GET', `/api/restaurants/${restaurantId}/ai-insights`);
+      const beforeResponse = await apiRequest('GET', `/api/restaurants/${restaurantId}/ai-insights?lang=${lang}`);
       const beforeData = await beforeResponse.json();
       const beforeIds = new Set(beforeData.map((insight: any) => insight.id));
 
       // Generate new insights
-      const response = await apiRequest('POST', `/api/restaurants/${restaurantId}/ai-insights/generate`);
+      const response = await apiRequest('POST', `/api/restaurants/${restaurantId}/ai-insights/generate?lang=${lang}`);
       const generatedData = await response.json();
       
       // Fetch all insights after generation
@@ -199,20 +202,20 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
 
       if (newCount > 0) {
       toast({
-        title: "Insights Generated",
-          description: `Generated ${newCount} new insight${newCount > 1 ? 's' : ''} for your restaurant`,
+        title: t('aiInsights.toast.generated.title', 'Insights Generated'),
+          description: t('aiInsights.toast.generated.description', `Generated ${newCount} new insight${newCount > 1 ? 's' : ''} for your restaurant`, { count: newCount }),
       });
       } else {
         toast({
-          title: "No New Insights",
-          description: "No new insights were generated. Try again later or adjust your data.",
+          title: t('aiInsights.toast.noNew.title', 'No New Insights'),
+          description: t('aiInsights.toast.noNew.description', 'No new insights were generated. Try again later or adjust your data.'),
         });
       }
     } catch (error) {
       console.error('Error generating AI insights:', error);
       toast({
-        title: "Error",
-        description: "Failed to generate new insights",
+        title: t('error'),
+        description: t('aiInsights.toast.generateFailed', 'Failed to generate new insights'),
         variant: "destructive"
       });
     } finally {
@@ -269,19 +272,28 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
     await apiRequest('PUT', `/api/restaurants/${restaurantId}/ai-insights/${id}/status`, { status: 'completed' });
     setInsights(prev => prev.map(i => i.id === id ? { ...i, implementationStatus: 'completed' } : i));
     setFilteredInsights(prev => prev.map(i => i.id === id ? { ...i, implementationStatus: 'completed' } : i));
-    toast({ title: 'Insight marked as implemented', description: 'This insight has been marked as implemented.' });
+    toast({ 
+      title: t('aiInsights.toast.implemented.title', 'Insight marked as implemented'), 
+      description: t('aiInsights.toast.implemented.description', 'This insight has been marked as implemented.') 
+    });
   };
 
   // Feedback
   const submitFeedback = (id: number) => {
     // Simulate feedback submission
-    toast({ title: 'Feedback submitted', description: 'Thank you for your feedback!' });
+    toast({ 
+      title: t('aiInsights.toast.feedback.title', 'Feedback submitted'), 
+      description: t('aiInsights.toast.feedback.description', 'Thank you for your feedback!') 
+    });
   };
 
   // Export insights (stub for now)
   const exportInsights = (format: 'csv' | 'json') => {
     // For now, just show a toast
-    toast({ title: 'Export', description: `Exported insights as ${format.toUpperCase()}` });
+    toast({ 
+      title: t('aiInsights.toast.export.title', 'Export'), 
+      description: t('aiInsights.toast.export.description', `Exported insights as ${format.toUpperCase()}`, { format: format.toUpperCase() }) 
+    });
   };
 
   // Filter out archived insights
@@ -335,8 +347,8 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
             <Brain className="h-6 w-6 text-purple-600" />
           </div>
           <div>
-            <h2 className="text-2xl font-bold text-gray-900">AI Insights</h2>
-            <p className="text-gray-600">Actionable recommendations for your restaurant</p>
+            <h2 className="text-2xl font-bold text-gray-900">{t('aiInsights.title', 'AI Insights')}</h2>
+            <p className="text-gray-600">{t('aiInsights.description', 'Actionable recommendations for your restaurant')}</p>
           </div>
         </div>
         <Button 
@@ -347,12 +359,12 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
           {isGenerating ? (
             <>
               <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-              Generating...
+              {t('aiInsights.generating', 'Generating...')}
             </>
           ) : (
             <>
               <RefreshCw className="h-4 w-4 mr-2" />
-              Regenerate Insights
+              {t('aiInsights.regenerate', 'Regenerate Insights')}
             </>
           )}
         </Button>
@@ -367,7 +379,7 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
                 <Brain className="h-5 w-5 text-blue-600" />
               </div>
               <div>
-                <p className="text-sm font-medium text-gray-600">Total Insights</p>
+                <p className="text-sm font-medium text-gray-600">{t('aiInsights.stats.total', 'Total Insights')}</p>
                 <p className="text-2xl font-bold text-gray-900">{totalInsights}</p>
               </div>
             </div>
@@ -381,7 +393,7 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
                 <Eye className="h-5 w-5 text-orange-600" />
               </div>
               <div>
-                <p className="text-sm font-medium text-gray-600">Unread</p>
+                <p className="text-sm font-medium text-gray-600">{t('aiInsights.stats.unread', 'Unread')}</p>
                 <p className="text-2xl font-bold text-gray-900">{unreadInsights}</p>
               </div>
             </div>
@@ -395,7 +407,7 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
                 <AlertTriangle className="h-5 w-5 text-red-600" />
               </div>
               <div>
-                <p className="text-sm font-medium text-gray-600">High Priority</p>
+                <p className="text-sm font-medium text-gray-600">{t('aiInsights.stats.highPriority', 'High Priority')}</p>
                 <p className="text-2xl font-bold text-gray-900">{highPriorityInsights}</p>
               </div>
             </div>
@@ -409,7 +421,7 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
                 <CheckCircle className="h-5 w-5 text-green-600" />
               </div>
               <div>
-                <p className="text-sm font-medium text-gray-600">Completed</p>
+                <p className="text-sm font-medium text-gray-600">{t('aiInsights.stats.completed', 'Completed')}</p>
                 <p className="text-2xl font-bold text-gray-900">{completedInsights}</p>
               </div>
             </div>
@@ -422,18 +434,18 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
         <Card>
           <CardContent className="p-8 text-center">
             <Brain className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No Insights Available</h3>
+            <h3 className="text-lg font-medium text-gray-900 mb-2">{t('aiInsights.noInsights.title', 'No Insights Available')}</h3>
             <p className="text-gray-600 mb-4">
-              Generate AI insights to get personalized recommendations for your restaurant.
+              {t('aiInsights.noInsights.description', 'Generate AI insights to get personalized recommendations for your restaurant.')}
             </p>
             <Button onClick={generateInsights} disabled={isGenerating}>
               {isGenerating ? (
                 <>
                   <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                  Generating...
+                  {t('aiInsights.generating', 'Generating...')}
                 </>
               ) : (
-                "Generate Insights"
+                t('aiInsights.noInsights.generate', 'Generate Insights')
               )}
             </Button>
           </CardContent>
@@ -462,14 +474,14 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
                   <span className="font-semibold text-[#373643] text-base">{insight.title}</span>
                   {insight.implementationStatus !== 'completed' ? (
                     <button className={implementedBtn} onClick={() => markAsImplemented(insight.id)}>
-                      <CheckCircle className="inline h-4 w-4 mr-1" /> Mark as Implemented
+                      <CheckCircle className="inline h-4 w-4 mr-1" /> {t('aiInsights.markAsImplemented', 'Mark as Implemented')}
                     </button>
                   ) : (
                     <span
                       className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 text-[#178a29] border border-[#22bb33]/20 flex items-center gap-1 cursor-default"
-                      title="This insight has been marked as implemented"
+                      title={t('aiInsights.implemented.tooltip', 'This insight has been marked as implemented')}
                     >
-                      <CheckCircle className="h-4 w-4" /> Implemented
+                      <CheckCircle className="h-4 w-4" /> {t('aiInsights.implemented', 'Implemented')}
                         </span>
                   )}
                 </div>
@@ -477,17 +489,20 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
                 <div className="text-sm text-gray-700 mb-2 line-clamp-2">{insight.description}</div>
                 {/* Feedback */}
                 <div className="flex items-center gap-2 mt-1">
-                  <span className="text-xs text-gray-500">Rate:</span>
+                  <span className="text-xs text-gray-500">{t('aiInsights.feedback.rate', 'Rate:')}:</span>
                   {[1,2,3,4,5].map(star => (
                     <span key={star} onClick={() => setFeedback(f => ({ ...f, [insight.id]: { ...(f[insight.id]||{}), rating: star } }))} className={feedbackStar(feedback[insight.id]?.rating >= star)}>★</span>
                   ))}
                   <Select value={feedback[insight.id]?.reason || ''} onValueChange={val => setFeedback(f => ({ ...f, [insight.id]: { ...(f[insight.id]||{}), reason: val } }))}>
-                    <SelectTrigger className={feedbackSelect}><SelectValue placeholder="Reason" /></SelectTrigger>
+                    <SelectTrigger className={feedbackSelect}><SelectValue placeholder={t('aiInsights.feedback.reasonPlaceholder', 'Reason')} /></SelectTrigger>
                     <SelectContent>
-                      {feedbackOptions.map(opt => <SelectItem key={opt} value={opt}>{opt}</SelectItem>)}
+                      <SelectItem value="helpful">{t('aiInsights.feedback.reasons.helpful', 'Helpful')}</SelectItem>
+                      <SelectItem value="not_relevant">{t('aiInsights.feedback.reasons.notRelevant', 'Not Relevant')}</SelectItem>
+                      <SelectItem value="already_known">{t('aiInsights.feedback.reasons.alreadyKnown', 'Already Known')}</SelectItem>
+                      <SelectItem value="too_generic">{t('aiInsights.feedback.reasons.tooGeneric', 'Too Generic')}</SelectItem>
                     </SelectContent>
                   </Select>
-                  <button className={feedbackSubmit} onClick={() => submitFeedback(insight.id)} disabled={!feedback[insight.id]?.rating || !feedback[insight.id]?.reason}>Submit</button>
+                  <button className={feedbackSubmit} onClick={() => submitFeedback(insight.id)} disabled={!feedback[insight.id]?.rating || !feedback[insight.id]?.reason}>{t('aiInsights.feedback.submit', 'Submit')}</button>
                 </div>
               </CardContent>
             </Card>
@@ -537,7 +552,7 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
 
                   {/* Recommendations */}
                   <div>
-                    <h4 className="text-lg font-semibold mb-3">Recommendations</h4>
+                    <h4 className="text-lg font-semibold mb-3">{t('aiInsights.dialog.recommendations', 'Recommendations')}</h4>
                     <div className="space-y-3">
                       {selectedInsight.recommendations.map((rec, index) => (
                         <div key={index} className="flex items-start space-x-3 p-3 bg-gray-50 rounded-lg">
@@ -554,10 +569,10 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
 
                   {/* Data Source */}
                   <div>
-                    <h4 className="text-lg font-semibold mb-3">Data Source</h4>
+                    <h4 className="text-lg font-semibold mb-3">{t('aiInsights.dialog.dataSource', 'Data Source')}</h4>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
-                        <p className="text-sm font-medium text-gray-600 mb-2">Metrics Used</p>
+                        <p className="text-sm font-medium text-gray-600 mb-2">{t('aiInsights.dialog.metricsUsed', 'Metrics Used')}</p>
                         <div className="flex flex-wrap gap-1">
                           {selectedInsight.dataSource.metrics.map((metric, index) => (
                             <Badge key={index} variant="secondary" className="text-xs">
@@ -567,7 +582,7 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
                         </div>
                       </div>
                       <div>
-                        <p className="text-sm font-medium text-gray-600 mb-2">Timeframe</p>
+                        <p className="text-sm font-medium text-gray-600 mb-2">{t('aiInsights.dialog.timeframe', 'Timeframe')}</p>
                         <Badge variant="outline">{selectedInsight.dataSource.timeframe}</Badge>
                       </div>
                     </div>
@@ -631,4 +646,4 @@ export function AIInsights({ restaurantId, startDate, endDate }: AIInsightsProps
       </Dialog>
     </div>
   );
-} 
+}

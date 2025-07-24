@@ -1,6 +1,6 @@
 import { useAuth } from "@/hooks/use-auth";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
-import { LanguageSelector } from "@/components/ui/language-selector";
+import LanguageSelector from "@/components/ui/language-selector";
 import { Link } from "wouter";
 import { getInitials } from "@/lib/utils";
 import { useLang } from "@/contexts/language-context";

@@ -15,8 +15,10 @@ import { Button } from "@/components/ui/button";
 import { History, Receipt, Search } from "lucide-react";
 import type { MenuItem } from "@shared/schema";
 import BillRequestModal from "@/components/BillRequestModal";
+import { useLang } from "@/contexts/language-context";
 
 export default function CustomerMenu() {
+  const { t } = useLang();
   const params = useParams();
   const [, navigate] = useLocation();
   const {
@@ -93,10 +95,11 @@ export default function CustomerMenu() {
   // Use the public restaurant data
   const restaurant = restaurantResponse as any;
 
+  const { lang } = useLang();
   const { data: menuResponse, isLoading: menuLoading } = useQuery({
-    queryKey: [`/api/public/restaurants/${restaurantId}/menu-items`],
+    queryKey: [`/api/public/restaurants/${restaurantId}/menu-items`, lang],
     queryFn: async () => {
-      const response = await fetch(`/api/public/restaurants/${restaurantId}/menu-items`);
+      const response = await fetch(`/api/public/restaurants/${restaurantId}/menu-items?lang=${lang}`);
       if (!response.ok) {
         throw new Error('Failed to fetch menu items');
       }
@@ -110,7 +113,7 @@ export default function CustomerMenu() {
       <div className="min-h-screen bg-white flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading menu...</p>
+          <p className="text-gray-600">{t('customerMenu.loading')}</p>
         </div>
       </div>
     );
@@ -120,7 +123,7 @@ export default function CustomerMenu() {
     return (
       <div className="min-h-screen bg-white flex items-center justify-center">
         <div className="text-center">
-          <p className="text-gray-600">Restaurant not found</p>
+          <p className="text-gray-600">{t('customerMenu.notFound')}</p>
         </div>
       </div>
     );
@@ -128,7 +131,7 @@ export default function CustomerMenu() {
 
   // Get menu data from the API response
   const menuData: MenuItem[] = (menuResponse as any)?.allItems || [];
-  const categories: string[] = [...new Set(menuData.map((item: MenuItem) => item.category || "Other"))];
+  const categories: string[] = [...new Set(menuData.map((item: MenuItem) => item.category || t('customerMenu.category.other')))];
   const filteredItems = selectedCategory === "all" 
     ? menuData 
     : menuData.filter((item: MenuItem) => (item.category || "Other") === selectedCategory);
@@ -140,19 +143,19 @@ export default function CustomerMenu() {
         <div className="bg-white border-b border-gray-200 px-4 py-2">
           <div className="flex items-center justify-between text-sm">
             <div className="flex items-center space-x-4">
-              <span className="text-gray-600">Session #{session.id}</span>
+              <span className="text-gray-600">{t('customerMenu.sessionInfo.id', { 'session.id': session.id })}</span>
               <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                 session.status === 'waiting' ? 'bg-yellow-100 text-yellow-800' :
                 session.status === 'active' ? 'bg-green-100 text-green-800' :
                 'bg-gray-100 text-gray-800'
               }`}>
-                {session.status === 'waiting' ? 'Place first order to activate' : 
-                 session.status === 'active' ? 'Session Active' : 
+                {session.status === 'waiting' ? t('customerMenu.sessionInfo.activate') : 
+                 session.status === 'active' ? t('customerMenu.sessionInfo.active') : 
                  session.status}
               </span>
             </div>
             <div className="text-xs text-gray-500">
-              Logged in as: {customer.name}
+              {t('customerMenu.sessionInfo.loggedInAs', { 'customer.name': customer.name })}
             </div>
           </div>
         </div>
@@ -170,10 +173,10 @@ export default function CustomerMenu() {
               />
             )}
             <div>
-              <h1 className="text-xl font-bold text-black">Hello, {customer?.name || "Guest"}! 😊</h1>
+              <h1 className="text-xl font-bold text-black">{t('customerMenu.header.hello', { name: customer?.name || t('customerMenu.header.guest') })}</h1>
               <div className="flex items-center space-x-3 text-sm text-red-600">
                 {tableNumber && (
-                  <span>Table {tableNumber}</span>
+                  <span>{t('customerMenu.header.table', { tableNumber })}</span>
                 )}
                 {session && (
                   <span className={`px-2 py-1 rounded-full text-xs font-medium ${
@@ -181,13 +184,13 @@ export default function CustomerMenu() {
                     session.status === 'active' ? 'bg-green-100 text-green-800' :
                     'bg-gray-100 text-gray-800'
                   }`}>
-                    {session.status === 'waiting' ? 'Waiting' : 
-                     session.status === 'active' ? 'Active' : 
+                    {session.status === 'waiting' ? t('customerMenu.header.waiting') : 
+                     session.status === 'active' ? t('customerMenu.header.active') : 
                      session.status}
                   </span>
                 )}
                 {customer && (
-                  <span className="text-xs">Welcome, {customer.name}</span>
+                  <span className="text-xs">{t('customerMenu.header.welcome', { name: customer.name })}</span>
                 )}
               </div>
             </div>
@@ -200,7 +203,7 @@ export default function CustomerMenu() {
                 onClick={() => setShowSessionModal(true)}
                 className="text-red-600 border-red-600 rounded-full"
               >
-                Join Session
+                {t('customerMenu.header.joinSession')}
               </Button>
             )}
             <Button variant="ghost" size="sm" onClick={() => setShowOrderHistory(true)} className="text-red-600">
@@ -216,7 +219,7 @@ export default function CustomerMenu() {
                 onClick={() => setShowBillRequest(true)}
                 className="text-red-600 border-red-600 rounded-full"
               >
-                <Receipt className="h-5 w-5 mr-1" /> Request Bill
+                <Receipt className="h-5 w-5 mr-1" /> {t('customerMenu.header.requestBill')}
               </Button>
             )}
           </div>
@@ -225,7 +228,7 @@ export default function CustomerMenu() {
           <Search className="h-4 w-4 text-gray-600 mr-2" />
           <input
             type="text"
-            placeholder="Enter a dish"
+            placeholder={t('customerMenu.header.searchPlaceholder')}
             className="bg-transparent w-full outline-none text-gray-600"
           />
         </div>
@@ -241,7 +244,7 @@ export default function CustomerMenu() {
               onClick={() => setSelectedCategory("all")}
               className={`rounded-full ${selectedCategory === "all" ? "bg-red-600 text-white" : "border-gray-200 text-gray-600"}`}
             >
-              All Items
+              {t('customerMenu.category.all')}
             </Button>
             {categories.map((category) => (
               <Button
@@ -288,7 +291,7 @@ export default function CustomerMenu() {
         
         {filteredItems.length === 0 && (
           <div className="text-center py-12">
-            <p className="text-gray-500">No items available in this category</p>
+            <p className="text-gray-500">{t('customerMenu.items.notAvailable')}</p>
           </div>
         )}
       </main>

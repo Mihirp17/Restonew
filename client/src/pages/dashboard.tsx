@@ -8,11 +8,11 @@ import { StaffOrderDialog } from "@/components/menu/staff-order-dialog";
 import { CustomerNamesDialog } from "@/components/orders/customer-names-dialog";
 import { useAuth } from "@/hooks/use-auth";
 import { useSocket } from "@/hooks/use-socket";
+import { useDashboardAnalytics } from "@/hooks/use-analytics-optimized";
 import { apiRequest } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { getRelativeDateRange } from "@/lib/utils";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Toast, ToastProvider, ToastViewport } from "@/components/ui/toast";
@@ -52,28 +52,31 @@ export default function Dashboard() {
   const { tables: rawTables = [], isLoading: isTablesLoading } = useTables(restaurantId!);
   const tables: Table[] = Array.isArray(rawTables) ? rawTables : [];
   const [dateRange, setDateRange] = useState<'today' | 'week' | 'month'>('today');
-  const [stats, setStats] = useState({
-    orderCount: 0,
-    revenue: 0,
-    averageOrderValue: 0,
-    activeTables: 0,
-    totalTables: 0
-  });
+  
+  // Use optimized analytics hook
+  const { data: analyticsData, isLoading: isAnalyticsLoading, error: analyticsError } = useDashboardAnalytics(restaurantId, dateRange);
+  
   const [waiterRequests, setWaiterRequests] = useState<WaiterRequest[]>([]);
   const [selectedWaiterRequest, setSelectedWaiterRequest] = useState<WaiterRequest | null>(null);
   const [isWaiterDialogOpen, setIsWaiterDialogOpen] = useState(false);
   const [isTableSelectionOpen, setIsTableSelectionOpen] = useState(false);
   const [isCustomerNamesOpen, setIsCustomerNamesOpen] = useState(false);
   const [showOrderDialog, setShowOrderDialog] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
   const [selectedTableId, setSelectedTableId] = useState<number | null>(null);
   const [selectedTableNumber, setSelectedTableNumber] = useState<number>(0);
   const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
 
-  // Memoize expensive calculations
-  const dateRangeData = useMemo(() => {
-    return getRelativeDateRange(dateRange);
-  }, [dateRange]);
+  // Extract stats from analytics data with fallback
+  const stats = {
+    orderCount: analyticsData?.orderCount || 0,
+    revenue: analyticsData?.revenue || 0,
+    averageOrderValue: analyticsData?.averageOrderValue || 0,
+    activeTables: analyticsData?.activeTables || 0,
+    totalTables: analyticsData?.totalTables || 0
+  };
+
+  // Loading state combines language and analytics loading
+  const isLoading = langLoading || isAnalyticsLoading;
 
   // Connect to WebSocket for real-time updates
   const { addEventListener } = useSocket(restaurantId);
@@ -85,10 +88,10 @@ export default function Dashboard() {
       setWaiterRequests(prev => [request, ...prev]);
       
       // Show notification
-      const requestTypeText = request.requestType === 'bill-payment' ? 'requests bill payment' : 'needs assistance';
+      const requestTypeText = request.requestType === 'bill-payment' ? t('dashboardPage.waiterRequests.billPayment') : t('dashboardPage.waiterRequests.needsAssistance');
       toast({
-        title: request.requestType === 'bill-payment' ? "Bill Payment Requested" : "Waiter Requested",
-        description: `Table ${request.tableId}: ${request.customerName} ${requestTypeText}`,
+        title: request.requestType === 'bill-payment' ? t('dashboardPage.waiterRequests.billPaymentTitle') : t('dashboardPage.waiterRequests.title'),
+        description: t('dashboardPage.waiterRequests.description', { tableId: request.tableId, customerName: request.customerName, requestType: requestTypeText }),
         variant: "default"
       });
       
@@ -105,38 +108,6 @@ export default function Dashboard() {
       // No need to remove event listener, this is handled by the useSocket hook cleanup
     };
   }, [addEventListener, toast]);
-
-  useEffect(() => {
-    const fetchStats = async () => {
-      if (!restaurantId) return;
-
-      setIsLoading(true);
-      try {
-        const { startDate: dateStart, endDate: dateEnd } = dateRangeData;
-        
-        // Use single combined analytics endpoint for better performance
-        const dashboardData = await apiRequest({
-          method: 'POST',
-          url: `/api/restaurants/${restaurantId}/analytics/dashboard`,
-          data: { startDate: dateStart, endDate: dateEnd }
-        });
-        
-        setStats({
-          orderCount: dashboardData.orderCount || 0,
-          revenue: dashboardData.revenue || 0,
-          averageOrderValue: dashboardData.averageOrderValue || 0,
-          activeTables: dashboardData.activeTables || 0,
-          totalTables: dashboardData.totalTables || 0
-        });
-      } catch (error) {
-        console.error('Error fetching stats:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchStats();
-  }, [restaurantId, dateRange, dateRangeData]);
 
   const handleStartNewOrder = () => {
     setIsTableSelectionOpen(true);
@@ -190,8 +161,8 @@ export default function Dashboard() {
       });
 
       toast({
-        title: "Session Started",
-        description: `Table ${selectedTableNumber} session created with ${customers.length} customers`,
+        title: t('dashboardPage.toast.sessionStarted.title'),
+        description: t('dashboardPage.toast.sessionStarted.description', { tableNumber: selectedTableNumber, count: customers.length }),
       });
 
       // Open order dialog
@@ -200,22 +171,21 @@ export default function Dashboard() {
     } catch (error) {
       console.error('Error creating session:', error);
       toast({
-        title: "Error",
-        description: "Failed to create table session",
+        title: t('dashboardPage.toast.sessionFailed.title'),
+        description: t('dashboardPage.toast.sessionFailed.description'),
         variant: "destructive"
       });
     }
   };
 
   const handleOrderPlaced = () => {
-    // Reset state and refresh data
+    // Reset state
     setSelectedTableId(null);
     setSelectedTableNumber(0);
     setCurrentSessionId(null);
     setShowOrderDialog(false);
     
-    // Refresh stats
-    // This will be handled by the useEffect when the component re-renders
+    // React Query will automatically refresh analytics data
   };
 
   // Add loading state for language
@@ -249,9 +219,9 @@ export default function Dashboard() {
         {waiterRequests.length > 0 && (
           <Alert className="bg-[#ba1d1d]/10 border-[#ba1d1d]/20 relative">
             <span className="material-icons text-[#ba1d1d] mr-2">notifications_active</span>
-            <AlertTitle className="text-[#ba1d1d]">Waiter Assistance Needed</AlertTitle>
+            <AlertTitle className="text-[#ba1d1d]">{t('dashboardPage.waiterRequests.title')}</AlertTitle>
             <AlertDescription className="text-[#373643]/80">
-              {waiterRequests.length} {waiterRequests.length === 1 ? 'table is' : 'tables are'} requesting assistance.
+              {waiterRequests.length} {waiterRequests.length === 1 ? t('dashboardPage.waiterRequests.single', { count: waiterRequests.length }) : t('dashboardPage.waiterRequests.multiple', { count: waiterRequests.length })}
               <Button 
                 variant="link" 
                 className="text-[#ba1d1d] hover:text-[#ba1d1d]/80 p-0 ml-2 underline" 
@@ -260,7 +230,7 @@ export default function Dashboard() {
                   setIsWaiterDialogOpen(true);
                 }}
               >
-                View Requests
+                {t('dashboardPage.waiterRequests.view')}
               </Button>
             </AlertDescription>
             {/* Close Button */}
@@ -271,11 +241,11 @@ export default function Dashboard() {
               onClick={() => {
                 setWaiterRequests([]);
                 toast({
-                  title: "Requests Cleared",
-                  description: "All waiter assistance requests have been resolved.",
+                  title: t('dashboardPage.waiterRequests.cleared'),
+                  description: t('dashboardPage.waiterRequests.clearedDescription'),
                 });
               }}
-              title="Clear all waiter requests"
+              title={t('dashboardPage.waiterRequests.clearAll')}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="18" y1="6" x2="6" y2="18"/>
@@ -386,7 +356,7 @@ export default function Dashboard() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="text-[#373643] flex items-center justify-between">
-              Waiter Requests
+              {t('dashboardPage.waiterRequests.dialogTitle')}
               <Button
                 variant="ghost"
                 size="sm"
@@ -411,10 +381,10 @@ export default function Dashboard() {
                   >
                     <div className="flex items-center justify-between pr-8">
                       <div>
-                        <p className="font-medium text-[#373643]">Table {request.tableId}</p>
+                        <p className="font-medium text-[#373643]">{t('table')} {request.tableId}</p>
                         <p className="text-sm text-[#373643]/60">{request.customerName}</p>
                         {request.requestType === 'bill-payment' && (
-                          <p className="text-xs text-green-600 font-medium">🧾 Bill Payment Request</p>
+                          <p className="text-xs text-green-600 font-medium">{t('dashboardPage.waiterRequests.billPayment')}</p>
                         )}
                       </div>
                       <div className="text-sm text-[#373643]/60">
@@ -447,7 +417,7 @@ export default function Dashboard() {
                 ))}
               </div>
             ) : (
-              <p className="text-center text-[#373643]/60">No active waiter requests</p>
+              <p className="text-center text-[#373643]/60">{t('dashboardPage.waiterRequests.noRequests')}</p>
             )}
           </div>
 
@@ -457,7 +427,7 @@ export default function Dashboard() {
               onClick={() => setIsWaiterDialogOpen(false)}
               className="border-[#373643]/20 text-[#373643] hover:bg-[#373643]/5"
             >
-              Close
+              {t('close')}
             </Button>
             {waiterRequests.length > 0 && (
               <Button
@@ -465,13 +435,13 @@ export default function Dashboard() {
                   setWaiterRequests([]);
                   setIsWaiterDialogOpen(false);
                   toast({
-                    title: "All Requests Cleared",
-                    description: "All waiter assistance requests have been resolved.",
+                    title: t('dashboardPage.waiterRequests.cleared'),
+                    description: t('dashboardPage.waiterRequests.clearedDescription'),
                   });
                 }}
                 className="bg-[#ba1d1d] hover:bg-[#ba1d1d]/90 text-white"
               >
-                Resolve All
+                {t('dashboardPage.waiterRequests.resolveAll')}
               </Button>
             )}
           </DialogFooter>
@@ -482,14 +452,14 @@ export default function Dashboard() {
       <Dialog open={isTableSelectionOpen} onOpenChange={setIsTableSelectionOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-[#373643]">Select Table</DialogTitle>
+            <DialogTitle className="text-[#373643]">{t('dashboardPage.tableSelection.title')}</DialogTitle>
           </DialogHeader>
           <div className="py-4">
             {isTablesLoading ? (
-              <div className="text-center text-[#373643]/60">Loading tables...</div>
+              <div className="text-center text-[#373643]/60">{t('loadingTables')}</div>
             ) : (
               <>
-                <label className="block mb-2 font-medium text-[#373643]">Select a vacant table:</label>
+                <label className="block mb-2 font-medium text-[#373643]">{t('dashboardPage.tableSelection.selectVacant')}</label>
                 <div className="grid grid-cols-2 gap-2 max-h-[300px] overflow-y-auto">
                   {tables.filter((t: Table) => !t.isOccupied).map((table: Table) => (
                     <Button
@@ -498,13 +468,13 @@ export default function Dashboard() {
                       className="h-16 flex flex-col items-center justify-center hover:bg-blue-50 hover:border-blue-300"
                       onClick={() => handleTableSelected(table.id, table.number)}
                     >
-                      <span className="font-semibold">Table {table.number}</span>
-                      <span className="text-xs text-gray-500">Capacity: {(table as any).capacity || 4}</span>
+                      <span className="font-semibold">{t('table')} {table.number}</span>
+                      <span className="text-xs text-gray-500">{t('dashboardPage.tableSelection.capacity', { capacity: (table as any).capacity || 4 })}</span>
                     </Button>
                   ))}
                 </div>
                 {tables.filter((t: Table) => !t.isOccupied).length === 0 && (
-                  <p className="text-center text-gray-500 py-4">No vacant tables available</p>
+                  <p className="text-center text-gray-500 py-4">{t('dashboardPage.tableSelection.noVacant')}</p>
                 )}
               </>
             )}
@@ -515,7 +485,7 @@ export default function Dashboard() {
               variant="outline"
               className="border-[#373643]/20 text-[#373643] hover:bg-[#373643]/5"
             >
-              Cancel
+              {t('cancel')}
             </Button>
           </DialogFooter>
         </DialogContent>

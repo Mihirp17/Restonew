@@ -544,12 +544,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: 'Invalid restaurant ID' });
       }
 
+      const lang = req.query.lang as string || 'en';
+
       // Get menu items and group them by category
       const menuItems = await storage.getMenuItems(restaurantId);
       
+      const translatedMenuItems = menuItems.map(item => {
+        const itemAsAny = item as any;
+        return {
+          ...item,
+          name: itemAsAny[`name${lang.charAt(0).toUpperCase() + lang.slice(1)}`] || item.name,
+          description: itemAsAny[`description${lang.charAt(0).toUpperCase() + lang.slice(1)}`] || item.description,
+          category: itemAsAny[`category${lang.charAt(0).toUpperCase() + lang.slice(1)}`] || item.category,
+        };
+      });
+
       // Group items by category (assuming category is a string field)
       const categoryMap = new Map<string, any[]>();
-      menuItems.forEach(item => {
+      translatedMenuItems.forEach(item => {
         const category = item.category || 'Uncategorized';
         if (!categoryMap.has(category)) {
           categoryMap.set(category, []);
@@ -566,7 +578,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       return res.json({
         categories,
-        allItems: menuItems
+        allItems: translatedMenuItems
       });
     } catch (error) {
       console.error('Error fetching menu items:', error);
@@ -1083,7 +1095,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const menuItem = await storage.createMenuItem(validation.data);
-      return res.status(201).json(menuItem);
+
+      // Automatically translate the new menu item
+      const { name, description, category } = validation.data;
+      const languages = ['en', 'es', 'ca'];
+      const translations: any = {};
+
+      for (const lang of languages) {
+        if (lang !== 'en') { // Assuming the original is in English
+          translations[`name${lang.charAt(0).toUpperCase() + lang.slice(1)}`] = await storage.translateText(name, lang);
+          if (description) {
+            translations[`description${lang.charAt(0).toUpperCase() + lang.slice(1)}`] = await storage.translateText(description, lang);
+          }
+          if (category) {
+            translations[`category${lang.charAt(0).toUpperCase() + lang.slice(1)}`] = await storage.translateText(category, lang);
+          }
+        }
+      }
+
+      const updatedMenuItem = await storage.updateMenuItem(menuItem.id, translations);
+
+      return res.status(201).json(updatedMenuItem);
     } catch (error) {
       console.error('Error creating menu item:', error);
       return res.status(500).json({ message: 'Failed to create menu item' });
@@ -1111,7 +1143,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: 'Menu item not found' });
       }
 
-      return res.json(updatedMenuItem);
+      // Automatically translate the updated menu item
+      const { name, description, category } = validation.data;
+      const languages = ['en', 'es', 'ca'];
+      const translations: any = {};
+
+      for (const lang of languages) {
+        if (lang !== 'en') { // Assuming the original is in English
+          if (name) {
+            translations[`name${lang.charAt(0).toUpperCase() + lang.slice(1)}`] = await storage.translateText(name, lang);
+          }
+          if (description) {
+            translations[`description${lang.charAt(0).toUpperCase() + lang.slice(1)}`] = await storage.translateText(description, lang);
+          }
+          if (category) {
+            translations[`category${lang.charAt(0).toUpperCase() + lang.slice(1)}`] = await storage.translateText(category, lang);
+          }
+        }
+      }
+
+      const finalMenuItem = await storage.updateMenuItem(menuItemId, translations);
+
+      return res.json(finalMenuItem);
     } catch (error) {
       console.error('Error updating menu item:', error);
       return res.status(500).json({ message: 'Failed to update menu item' });
@@ -1348,7 +1401,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Analytics Routes
   console.log("Setting up analytics routes...");
   
-  // Combined dashboard analytics endpoint for better performance
+  // Simple in-memory cache for analytics
+  const analyticsCache = new Map();
+  const CACHE_TTL = 3 * 60 * 1000; // 3 minutes
+
+  // Combined dashboard analytics endpoint with optimized single query
   app.post('/api/restaurants/:restaurantId/analytics/dashboard', authenticate, authorizeRestaurant, async (req, res) => {
     try {
       const restaurantId = parseInt(req.params.restaurantId);
@@ -1362,27 +1419,79 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { startDate: startDateStr, endDate: endDateStr } = validation.data;
+      const cacheKey = `dashboard_${restaurantId}_${startDateStr}_${endDateStr}`;
+      
+      // Check cache first
+      const cached = analyticsCache.get(cacheKey);
+      if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+        return res.json(cached.data);
+      }
+
       const startDate = new Date(startDateStr);
       const endDate = new Date(endDateStr);
       
-      // Fetch all analytics data in parallel for better performance
-      const [revenue, orderCount, averageOrderValue, tables] = await Promise.all([
-        storage.getRestaurantRevenue(restaurantId, startDate, endDate),
-        storage.getOrderCountByRestaurantId(restaurantId, startDate, endDate),
-        storage.getAverageOrderValue(restaurantId, startDate, endDate),
-        storage.getTablesByRestaurantId(restaurantId)
-      ]);
+      // Single optimized query combining all dashboard metrics
+      const result = await storage.getCombinedDashboardAnalytics(restaurantId, startDate, endDate);
 
-      return res.json({
-        revenue,
-        orderCount,
-        averageOrderValue,
-        activeTables: tables.filter(table => table.isOccupied).length,
-        totalTables: tables.length
+      // Cache the result
+      analyticsCache.set(cacheKey, {
+        data: result,
+        timestamp: Date.now()
       });
+
+      return res.json(result);
     } catch (error) {
       console.error('Error fetching dashboard analytics:', error);
       return res.status(500).json({ message: 'Failed to fetch dashboard analytics' });
+    }
+  });
+
+  // Combined analytics endpoint for full analytics page
+  app.post('/api/restaurants/:restaurantId/analytics/combined', authenticate, authorizeRestaurant, async (req, res) => {
+    try {
+      const restaurantId = parseInt(req.params.restaurantId);
+      if (isNaN(restaurantId)) {
+        return res.status(400).json({ message: 'Invalid restaurant ID' });
+      }
+
+      const validation = sharedDateRangeSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ errors: validation.error.errors });
+      }
+
+      const { startDate: startDateStr, endDate: endDateStr } = validation.data;
+      const cacheKey = `analytics_${restaurantId}_${startDateStr}_${endDateStr}`;
+      
+      // Check cache first
+      const cached = analyticsCache.get(cacheKey);
+      if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+        return res.json(cached.data);
+      }
+
+      const startDate = new Date(startDateStr);
+      const endDate = new Date(endDateStr);
+      
+      // Get all analytics data in one optimized call
+      const [dashboardData, popularItems] = await Promise.all([
+        storage.getCombinedDashboardAnalytics(restaurantId, startDate, endDate),
+        storage.getPopularMenuItems(restaurantId, 10, { startDate, endDate })
+      ]);
+
+      const result = {
+        ...dashboardData,
+        popularItems
+      };
+
+      // Cache the result
+      analyticsCache.set(cacheKey, {
+        data: result,
+        timestamp: Date.now()
+      });
+
+      return res.json(result);
+    } catch (error) {
+      console.error('Error fetching combined analytics:', error);
+      return res.status(500).json({ message: 'Failed to fetch combined analytics' });
     }
   });
 
@@ -2201,8 +2310,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: 'Restaurant not found' });
       }
 
+      const lang = req.query.lang as string || 'en';
       // Generate insights
-      const insights = await generateRestaurantInsights(restaurantId);
+      const insights = await generateRestaurantInsights(restaurantId, lang);
       if (!insights || insights.length === 0) {
         return res.status(500).json({ 
           message: 'No insights could be generated',
@@ -2298,7 +2408,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       };
 
-      const reply = await handleRestaurantChat(chatRequest);
+      const lang = req.query.lang as string || 'en';
+      const reply = await handleRestaurantChat(chatRequest, lang);
       return res.json({ reply });
     } catch (error) {
       console.error('AI Chat error:', error);

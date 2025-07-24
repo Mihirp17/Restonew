@@ -12,7 +12,11 @@
     "create-admin": "cross-env NODE_ENV=development tsx --es-module-specifier-resolution=node scripts/create-admin.ts",
     "seed-test-data": "cross-env NODE_ENV=development tsx --es-module-specifier-resolution=node scripts/seed-test-data.ts",
     "monitor": "node scripts/monitor-performance.js",
-    "monitor:watch": "node scripts/monitor-performance.js --watch 30000"
+    "monitor:watch": "node scripts/monitor-performance.js --watch 30000",
+    "translate": "cross-env tsx --es-module-specifier-resolution=node scripts/translate.js",
+    "optimize": "node scripts/optimize-database.mjs",
+    "optimize:db": "node scripts/optimize-database.mjs",
+    "optimize:windows": "scripts\\optimize.bat"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

@@ -28,15 +28,15 @@ const menuItemSchema = z.object({
 });
 
 const DEFAULT_CATEGORIES = [
-  "Tapas",
-  "Salads",
-  "Soups",
-  "Sandwiches and burgers",
-  "Entres",
-  "Pasta and pizza",
-  "Beers",
-  "Drinks",
-  "Alcoholic drinks"
+  "menuManagement.categories.tapas",
+  "menuManagement.categories.salads",
+  "menuManagement.categories.soups",
+  "menuManagement.categories.sandwichesAndBurgers",
+  "menuManagement.categories.entres",
+  "menuManagement.categories.pastaAndPizza",
+  "menuManagement.categories.beers",
+  "menuManagement.categories.drinks",
+  "menuManagement.categories.alcoholicDrinks"
 ];
 
 export default function MenuManagement() {
@@ -100,13 +100,13 @@ export default function MenuManagement() {
     try {
       await deleteMenuItem(itemId);
       toast({
-        title: "Menu item deleted",
-        description: "The menu item has been successfully deleted."
+        title: t('menuManagement.toast.deleted.title'),
+        description: t('menuManagement.toast.deleted.description')
       });
     } catch (error) {
       toast({
-        title: "Error",
-        description: "Failed to delete menu item.",
+        title: t('menuManagement.toast.deleteFailed.title'),
+        description: t('menuManagement.toast.deleteFailed.description'),
         variant: "destructive"
       });
     }
@@ -124,8 +124,8 @@ export default function MenuManagement() {
           }
         });
         toast({
-          title: "Menu item updated",
-          description: "The menu item has been successfully updated."
+          title: t('menuManagement.toast.updated.title'),
+          description: t('menuManagement.toast.updated.description')
         });
       } else {
         // Create new item
@@ -136,15 +136,15 @@ export default function MenuManagement() {
           image: data.image || undefined
         });
         toast({
-          title: "Menu item created",
-          description: "The new menu item has been successfully added."
+          title: t('menuManagement.toast.created.title'),
+          description: t('menuManagement.toast.created.description')
         });
       }
       setIsDialogOpen(false);
     } catch (error) {
       toast({
-        title: "Error",
-        description: "Failed to save menu item.",
+        title: t('menuManagement.toast.saveFailed.title'),
+        description: t('menuManagement.toast.saveFailed.description'),
         variant: "destructive"
       });
     }
@@ -165,12 +165,12 @@ export default function MenuManagement() {
     return (
       <Layout
         title={t("menuManagement", "Menu Management")}
-        description="Create, edit and manage your restaurant menu"
+        description={t('menuManagement.description')}
         requireAuth
         allowedRoles={['restaurant']}
       >
         <div className="text-center py-12">
-          <p className="text-gray-500 dark:text-gray-400">{t("loading", "Loading restaurant information...")}</p>
+          <p className="text-gray-500 dark:text-gray-400">{t('menuManagement.loading')}</p>
         </div>
       </Layout>
     );
@@ -179,7 +179,7 @@ export default function MenuManagement() {
   return (
     <Layout
       title={t("menuManagement", "Menu Management")}
-      description="Create, edit and manage your restaurant menu"
+      description={t('menuManagement.description')}
       requireAuth
       allowedRoles={['restaurant']}
     >
@@ -188,7 +188,7 @@ export default function MenuManagement() {
         <div className="flex flex-col sm:flex-row justify-between gap-4">
           <div className="relative">
             <Input
-              placeholder="Search menu items..."
+              placeholder={t('menuManagement.searchPlaceholder')}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-10 w-full sm:w-64"
@@ -209,7 +209,7 @@ export default function MenuManagement() {
         <Tabs value={activeCategory} onValueChange={setActiveCategory}>
           <TabsList className="flex overflow-x-auto pb-px mb-4 space-x-2">
             <TabsTrigger value="all" className="px-4 py-2 whitespace-nowrap">
-              All Items
+              {t('menuManagement.tabs.all')}
             </TabsTrigger>
             {categories.map(category => (
               <TabsTrigger 
@@ -227,7 +227,7 @@ export default function MenuManagement() {
             {isLoading ? (
               <div className="text-center py-12">
                 <div className="animate-spin w-8 h-8 border-4 border-brand border-t-transparent rounded-full mx-auto"></div>
-                <p className="mt-2 text-gray-500 dark:text-gray-400">Loading menu items...</p>
+                <p className="mt-2 text-gray-500 dark:text-gray-400">{t('menuManagement.grid.loading')}</p>
               </div>
             ) : filteredItems && filteredItems.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -242,13 +242,13 @@ export default function MenuManagement() {
               </div>
             ) : (
               <div className="text-center py-12">
-                <p className="text-gray-500 dark:text-gray-400">No menu items found</p>
+                <p className="text-gray-500 dark:text-gray-400">{t('menuManagement.grid.noItems')}</p>
                 <Button 
                   onClick={handleAddNewItem}
                   variant="outline"
                   className="mt-4"
                 >
-                  Add your first menu item
+                  {t('menuManagement.grid.addFirstItem')}
                 </Button>
               </div>
             )}
@@ -260,7 +260,7 @@ export default function MenuManagement() {
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>{editingItem ? "Edit Menu Item" : "Add Menu Item"}</DialogTitle>
+            <DialogTitle>{editingItem ? t('menuManagement.dialog.editTitle') : t('menuManagement.dialog.addTitle')}</DialogTitle>
           </DialogHeader>
           
           <Form {...form}>
@@ -270,9 +270,9 @@ export default function MenuManagement() {
                 name="name"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Name</FormLabel>
+                    <FormLabel>{t('nameLabel')}</FormLabel>
                     <FormControl>
-                      <Input {...field} placeholder="e.g. Signature Burger" />
+                      <Input {...field} placeholder={t('menuManagement.dialog.namePlaceholder')} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -284,11 +284,11 @@ export default function MenuManagement() {
                 name="description"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Description</FormLabel>
+                    <FormLabel>{t('descriptionLabel')}</FormLabel>
                     <FormControl>
                       <Textarea
                         {...field}
-                        placeholder="Describe your menu item..."
+                        placeholder={t('menuManagement.dialog.descriptionPlaceholder')}
                         value={field.value || ""}
                       />
                     </FormControl>
@@ -303,9 +303,9 @@ export default function MenuManagement() {
                   name="price"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Price ($)</FormLabel>
+                      <FormLabel>{t('priceLabel')}</FormLabel>
                       <FormControl>
-                        <Input {...field} type="number" step="0.01" min="0" placeholder="12.99" />
+                        <Input {...field} type="number" step="0.01" min="0" placeholder={t('menuManagement.dialog.pricePlaceholder')} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -318,20 +318,20 @@ export default function MenuManagement() {
                   name="category"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Category</FormLabel>
+                      <FormLabel>{t('categoryLabel')}</FormLabel>
                       <Select 
                         value={field.value} 
                         onValueChange={field.onChange}
                       >
                         <FormControl>
                           <SelectTrigger>
-                            <SelectValue placeholder="Select category" />
+                            <SelectValue placeholder={t('selectCategory')} />
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
                           {DEFAULT_CATEGORIES.map(category => (
-                            <SelectItem key={category} value={category}>
-                              {category}
+                            <SelectItem key={category} value={t(category)}>
+                              {t(category)}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -347,7 +347,7 @@ export default function MenuManagement() {
                 name="image"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Image URL (optional)</FormLabel>
+                    <FormLabel>{t('imageUrlLabel')}</FormLabel>
                     <FormControl>
                       <Input 
                         {...field} 
@@ -366,9 +366,9 @@ export default function MenuManagement() {
                 render={({ field }) => (
                   <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3">
                     <div className="space-y-0.5">
-                      <FormLabel>Available</FormLabel>
+                      <FormLabel>{t('availableLabel')}</FormLabel>
                       <p className="text-sm text-gray-500 dark:text-gray-400">
-                        This item will be shown on the menu
+                        {t('availableDescription')}
                       </p>
                     </div>
                     <FormControl>
@@ -388,7 +388,7 @@ export default function MenuManagement() {
                   onClick={() => setIsDialogOpen(false)}
                   className="border-[#373643]/20 text-[#373643] hover:bg-[#373643]/5"
                 >
-                  Cancel
+                  {t('cancel')}
                 </Button>
                 <Button 
                   type="submit" 
@@ -398,10 +398,10 @@ export default function MenuManagement() {
                   {form.formState.isSubmitting ? (
                     <span className="flex items-center">
                       <span className="animate-spin mr-2 w-4 h-4 border-2 border-white border-t-transparent rounded-full"></span>
-                      Saving...
+                      {t('menuManagement.dialog.saving')}
                     </span>
                   ) : (
-                    editingItem ? "Update Item" : "Add Item"
+                    editingItem ? t('updateItem') : t('addItem')
                   )}
                 </Button>
               </DialogFooter>

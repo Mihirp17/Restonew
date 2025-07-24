@@ -8,6 +8,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Bot, User, Send, Zap, TrendingUp, BarChart3, UtensilsCrossed, Users } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChartContainer } from "@/components/ui/chart";
+import { useLang } from "@/contexts/language-context";
 
 interface Message {
   id: string;
@@ -20,26 +21,26 @@ interface AIChatboxProps {
   restaurantId: number;
 }
 
-const QUICK_ACTIONS = [
+const QUICK_ACTIONS = (t: (key: string) => string) => [
   {
     icon: TrendingUp,
-    label: "Revenue Analysis",
-    query: "How is my restaurant's revenue performing this month? What trends do you see?"
+    label: t('aiChat.quickActions.revenue'),
+    query: t('aiChat.quickActions.revenueQuery')
   },
   {
     icon: UtensilsCrossed,
-    label: "Menu Optimization",
-    query: "Which menu items are performing best and which ones should I consider promoting or removing?"
+    label: t('aiChat.quickActions.menu'),
+    query: t('aiChat.quickActions.menuQuery')
   },
   {
     icon: Users,
-    label: "Customer Insights",
-    query: "What insights can you provide about my customers and their satisfaction levels?"
+    label: t('aiChat.quickActions.customer'),
+    query: t('aiChat.quickActions.customerQuery')
   },
   {
     icon: BarChart3,
-    label: "Operations",
-    query: "How can I improve my restaurant's operational efficiency and reduce wait times?"
+    label: t('aiChat.quickActions.operations'),
+    query: t('aiChat.quickActions.operationsQuery')
   }
 ];
 
@@ -70,10 +71,11 @@ function removeChartJson(text: string) {
 }
 
 export function AIChatbox({ restaurantId }: AIChatboxProps) {
+  const { lang, t } = useLang();
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
-      content: "Hi! I'm your AI restaurant assistant. I can help you analyze your performance, optimize your menu, understand your customers, and improve your operations. What would you like to know about your restaurant?",
+      content: t('aiChat.welcome'),
       isUser: false,
       timestamp: new Date()
     }
@@ -112,7 +114,7 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
     setIsTyping(true);
 
     try {
-      const response = await apiRequest('POST', `/api/restaurants/${restaurantId}/ai-chat`, {
+      const response = await apiRequest('POST', `/api/restaurants/${restaurantId}/ai-chat?lang=${lang}`, {
         message: content.trim()
       });
 
@@ -139,7 +141,7 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
       
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
-        content: "I'm sorry, I'm having trouble processing your request right now. Please try again in a moment.",
+        content: t('aiChat.error'),
         isUser: false,
         timestamp: new Date()
       };
@@ -147,8 +149,8 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
       setMessages(prev => [...prev, errorMessage]);
       
       toast({
-        title: "Error",
-        description: "Failed to get AI response",
+        title: t('error'),
+        description: t('aiChat.toast.error'),
         variant: "destructive"
       });
     }
@@ -196,7 +198,7 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
           <div className="p-2 bg-purple-100 rounded-lg">
             <Bot className="h-5 w-5 text-purple-600" />
           </div>
-          <span>AI Assistant</span>
+          <span>{t('aiChat.title')}</span>
         </CardTitle>
       </CardHeader>
 
@@ -279,9 +281,9 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
         {/* Quick Actions */}
         {messages.length <= 1 && (
           <div className="px-4 pb-4">
-            <p className="text-sm text-gray-600 mb-3">Quick questions:</p>
+            <p className="text-sm text-gray-600 mb-3">{t('aiChat.quickQuestions')}</p>
             <div className="grid grid-cols-2 gap-2">
-              {QUICK_ACTIONS.map((action, index) => (
+              {QUICK_ACTIONS(t).map((action, index) => (
                 <Button
                   key={index}
                   variant="outline"
@@ -308,7 +310,7 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
               data-chatbox-input
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
-              placeholder="Ask me anything about your restaurant..."
+              placeholder={t('aiChat.placeholder')}
               disabled={isLoading}
               className="flex-1"
             />
@@ -321,10 +323,10 @@ export function AIChatbox({ restaurantId }: AIChatboxProps) {
             </Button>
           </form>
           <p className="text-xs text-gray-500 mt-2">
-            Ask about revenue, menu performance, customer feedback, or operational improvements.
+            {t('aiChat.promptExamples')}
           </p>
         </div>
       </CardContent>
     </Card>
   );
-} 
+}

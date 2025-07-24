@@ -26,19 +26,15 @@ export function useAIStats(restaurantId: number | undefined) {
         setStats(data);
       } catch (error) {
         console.error('Error fetching AI stats:', error);
-        toast({
-          title: 'Error',
-          description: 'Failed to fetch AI statistics',
-          variant: 'destructive',
-        });
+        // Don't show toast for AI stats errors to avoid spam
       } finally {
         setIsLoading(false);
       }
     };
 
     fetchStats();
-    // Poll for updates every minute
-    const interval = setInterval(fetchStats, 60000);
+    // Reduced polling from 1 minute to 5 minutes for better performance
+    const interval = setInterval(fetchStats, 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, [restaurantId, toast]);
 

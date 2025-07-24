@@ -5,6 +5,8 @@ import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useLang } from "@/contexts/language-context";
+import LanguageSelector from "@/components/ui/language-selector";
 
 export default function CustomerEntry() {
   const params = useParams();
@@ -22,6 +24,7 @@ export default function CustomerEntry() {
     customer
   } = useRestaurant();
   const { toast } = useToast();
+  const { t } = useLang();
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -57,7 +60,7 @@ export default function CustomerEntry() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
-      toast({ title: "Error", description: "Name is required", variant: "destructive" });
+      toast({ title: t('customerEntry.toast.errorTitle'), description: t('customerEntry.toast.nameRequired'), variant: "destructive" });
       return;
     }
     setIsSubmitting(true);
@@ -87,7 +90,7 @@ export default function CustomerEntry() {
           const customer = await customerResponse.json();
           setSession(activeSession);
           setCustomer(customer);
-          toast({ title: "Joined Table Session!", description: `Welcome ${name}! You've joined the table session.` });
+          toast({ title: t('customerEntry.toast.joinedSessionTitle'), description: t('customerEntry.toast.joinedSessionDescription', { name }) });
           
           // Trigger navigation after context is set
           console.log("Setting shouldNavigate to true (join session)");
@@ -98,7 +101,7 @@ export default function CustomerEntry() {
       // Create new session
       const parsedTableNumber = Number(tableNumber);
       if (!parsedTableNumber || isNaN(parsedTableNumber)) {
-        toast({ title: "Error", description: "Invalid table number.", variant: "destructive" });
+        toast({ title: t('customerEntry.toast.errorTitle'), description: t('customerEntry.toast.invalidTable'), variant: "destructive" });
         setIsSubmitting(false);
         return;
       }
@@ -114,10 +117,10 @@ export default function CustomerEntry() {
       if (!sessionResponse.ok) {
         const errorData = await sessionResponse.json().catch(() => ({}));
         if (sessionResponse.status === 409) {
-          toast({ title: "Table Occupied", description: "This table is already in use. Please try again.", variant: "destructive" });
+          toast({ title: t('customerEntry.toast.tableOccupiedTitle'), description: t('customerEntry.toast.tableOccupiedDescription'), variant: "destructive" });
           return;
         }
-        throw new Error(errorData.message || "Failed to create session");
+        throw new Error(errorData.message || t('customerEntry.toast.sessionCreateFailed'));
       }
       const session = await sessionResponse.json();
       // Create main customer
@@ -134,20 +137,20 @@ export default function CustomerEntry() {
       });
       if (!customerResponse.ok) {
         const errorData = await customerResponse.json().catch(() => ({}));
-        throw new Error(errorData.message || "Failed to create customer");
+        throw new Error(errorData.message || t('customerEntry.toast.customerCreateFailed'));
       }
       const customer = await customerResponse.json();
       setSession(session);
       setCustomer(customer);
-      toast({ title: "Welcome!", description: `Welcome ${name}! Your table session is ready.` });
+      toast({ title: t('customerEntry.toast.welcomeTitle'), description: t('customerEntry.toast.welcomeDescription', { name }) });
       
       // Trigger navigation after context is set
       console.log("Setting shouldNavigate to true (new session)");
       setShouldNavigate(true);
     } catch (error: any) {
       toast({ 
-        title: "Error", 
-        description: error.message || "Failed to start session. Please try again.", 
+        title: t('customerEntry.toast.errorTitle'), 
+        description: error.message || t('customerEntry.toast.startSessionFailed'), 
         variant: "destructive" 
       });
     } finally {
@@ -160,7 +163,7 @@ export default function CustomerEntry() {
       <div className="min-h-screen flex items-center justify-center bg-white">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading...</p>
+          <p className="text-gray-600">{t('customerEntry.loading')}</p>
         </div>
       </div>
     );
@@ -168,6 +171,9 @@ export default function CustomerEntry() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-white px-4">
+      <div className="absolute top-4 right-4">
+        <LanguageSelector />
+      </div>
       {restaurant.logo && (
         <img
           src={restaurant.logo}
@@ -176,45 +182,45 @@ export default function CustomerEntry() {
         />
       )}
       <h1 className="text-3xl font-bold text-red-700 mb-2">{restaurant.name}</h1>
-      <p className="text-lg text-gray-700 mb-8">Welcome! Please enter your details to start ordering.</p>
+      <p className="text-lg text-gray-700 mb-8">{t('customerEntry.welcomeMessage')}</p>
       <form onSubmit={handleSubmit} className="w-full max-w-md bg-white rounded-xl shadow-lg p-8 space-y-6 border border-gray-100">
         <div>
-          <Label htmlFor="name" className="font-medium text-black">Name *</Label>
+          <Label htmlFor="name" className="font-medium text-black">{t('customerEntry.nameLabel')}</Label>
           <Input
             id="name"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Enter your name"
+            placeholder={t('customerEntry.namePlaceholder')}
             className="rounded-lg bg-gray-100 mt-1"
             required
           />
         </div>
         <div>
-          <Label htmlFor="email" className="font-medium text-black">Email (optional)</Label>
+          <Label htmlFor="email" className="font-medium text-black">{t('customerEntry.emailLabel')}</Label>
           <Input
             id="email"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="Enter your email"
+            placeholder={t('customerEntry.emailPlaceholder')}
             className="rounded-lg bg-gray-100 mt-1"
           />
         </div>
         <div>
-          <Label htmlFor="phone" className="font-medium text-black">Phone (optional)</Label>
+          <Label htmlFor="phone" className="font-medium text-black">{t('customerEntry.phoneLabel')}</Label>
           <Input
             id="phone"
             type="tel"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
-            placeholder="Enter your phone number"
+            placeholder={t('customerEntry.phonePlaceholder')}
             className="rounded-lg bg-gray-100 mt-1"
           />
         </div>
         <Button type="submit" disabled={isSubmitting} className="w-full bg-red-600 text-white rounded-lg hover:bg-red-700">
-          {isSubmitting ? "Starting..." : "Start Ordering"}
+          {isSubmitting ? t('customerEntry.submitButton.submitting') : t('customerEntry.submitButton.default')}
         </Button>
       </form>
     </div>
   );
-} 
+}

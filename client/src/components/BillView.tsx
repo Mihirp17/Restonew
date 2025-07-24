@@ -9,6 +9,7 @@ import { useRestaurant } from "@/contexts/RestaurantContext";
 import { useToast } from "@/hooks/use-toast";
 import { Download, Printer, Receipt, CreditCard, Users, User, Calculator, Bell } from "lucide-react";
 import BillRequestModal from "./BillRequestModal";
+import { useLang } from "@/contexts/language-context";
 
 interface BillViewProps {
   open: boolean;
@@ -57,6 +58,7 @@ interface Bill {
 export default function BillView({ open, onOpenChange }: BillViewProps) {
   const { restaurantId, session, restaurant, customer } = useRestaurant();
   const { toast } = useToast();
+  const { t } = useLang();
   const [bills, setBills] = useState<Bill[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [showBillRequest, setShowBillRequest] = useState(false);
@@ -93,14 +95,14 @@ export default function BillView({ open, onOpenChange }: BillViewProps) {
       });
 
       if (response.ok) {
-        toast({ title: "Payment Successful", description: "Your bill has been marked as paid" });
+        toast({ title: t('billView.toast.paymentSuccess.title'), description: t('billView.toast.paymentSuccess.description') });
         fetchBills();
       } else {
-        throw new Error('Failed to process payment');
+        throw new Error(t('billView.toast.paymentFailed.description'));
       }
     } catch (error) {
       console.error("Error processing payment:", error);
-      toast({ title: "Payment Failed", description: "Failed to process payment.", variant: "destructive" });
+      toast({ title: t('billView.toast.paymentFailed.title'), description: t('billView.toast.paymentFailed.description'), variant: "destructive" });
     }
   };
 
@@ -115,10 +117,10 @@ export default function BillView({ open, onOpenChange }: BillViewProps) {
 
   const getBillTypeLabel = (type: string) => {
     switch (type) {
-      case 'individual': return 'Individual Bill';
-      case 'combined': return 'Combined Bill';
-      case 'partial': return 'Partial Bill';
-      default: return 'Bill';
+      case 'individual': return t('billView.card.individual');
+      case 'combined': return t('billView.card.combined');
+      case 'partial': return t('billView.card.partial');
+      default: return t('billView.card.bill');
     }
   };
 
@@ -159,33 +161,33 @@ export default function BillView({ open, onOpenChange }: BillViewProps) {
             <div class="bill-info">
               <p><strong>Bill #:</strong> ${bill.billNumber}</p>
               <p><strong>Type:</strong> ${getBillTypeLabel(bill.type)}</p>
-              ${bill.customer ? `<p><strong>Customer:</strong> ${bill.customer.name}</p>` : ''}
+              ${bill.customer ? `<p><strong>${t('customer')}:</strong> ${bill.customer.name}</p>` : ''}
               <p><strong>Status:</strong> ${bill.status.toUpperCase()}</p>
             </div>
             <div class="totals">
               <div class="total-line">
-                <span>Subtotal:</span>
+                <span>${t('billView.card.subtotal')}</span>
                 <span>$${parseFloat(bill.subtotal).toFixed(2)}</span>
               </div>
               ${parseFloat(bill.tax) > 0 ? `
                 <div class="total-line">
-                  <span>Tax:</span>
+                  <span>${t('billView.card.tax')}</span>
                   <span>$${parseFloat(bill.tax).toFixed(2)}</span>
                 </div>
               ` : ''}
               ${parseFloat(bill.tip) > 0 ? `
                 <div class="total-line">
-                  <span>Tip:</span>
+                  <span>${t('billView.card.tip')}</span>
                   <span>$${parseFloat(bill.tip).toFixed(2)}</span>
                 </div>
               ` : ''}
               <div class="total-line final-total">
-                <span>Total:</span>
+                <span>${t('billView.card.total')}</span>
                 <span>$${parseFloat(bill.total).toFixed(2)}</span>
               </div>
             </div>
             <div class="footer">
-              <p>Thank you for dining with us!</p>
+              <p>${t('thankYou')}</p>
               ${bill.status === 'paid' ? `<p>✓ Paid on ${bill.paidAt ? new Date(bill.paidAt).toLocaleString() : 'N/A'}</p>` : ''}
             </div>
           </body>
@@ -248,41 +250,41 @@ Thank you for dining with us!
         </div>
       </CardHeader>
       <CardContent className="pt-2">
-        {bill.customer && <p className="text-sm text-gray-600 mb-2">Customer: {bill.customer.name}</p>}
+        {bill.customer && <p className="text-sm text-gray-600 mb-2">{t('billView.card.customer', { name: bill.customer.name })}</p>}
         <p className="text-xs text-gray-500 mb-3">{formatDate(bill.createdAt)}</p>
         <div className="space-y-1 text-sm text-gray-600">
           <div className="flex justify-between">
-            <span>Subtotal:</span>
+            <span>{t('billView.card.subtotal')}</span>
             <span>${parseFloat(bill.subtotal).toFixed(2)}</span>
           </div>
           {parseFloat(bill.tax) > 0 && (
             <div className="flex justify-between">
-              <span>Tax:</span>
+              <span>{t('billView.card.tax')}</span>
               <span>${parseFloat(bill.tax).toFixed(2)}</span>
             </div>
           )}
           {parseFloat(bill.tip) > 0 && (
             <div className="flex justify-between">
-              <span>Tip:</span>
+              <span>{t('billView.card.tip')}</span>
               <span>${parseFloat(bill.tip).toFixed(2)}</span>
             </div>
           )}
           <Separator className="my-2" />
           <div className="flex justify-between font-bold text-black">
-            <span>Total:</span>
+            <span>{t('billView.card.total')}</span>
             <span>${parseFloat(bill.total).toFixed(2)}</span>
           </div>
         </div>
         <div className="flex space-x-2 mt-4">
           <Button variant="outline" size="sm" onClick={() => handlePrint(bill)} className="flex-1 rounded-lg">
-            <Printer className="h-4 w-4 mr-2" /> Print
+            <Printer className="h-4 w-4 mr-2" /> {t('billView.card.print')}
           </Button>
           <Button variant="outline" size="sm" onClick={() => handleDownload(bill)} className="flex-1 rounded-lg">
-            <Download className="h-4 w-4 mr-2" /> Download
+            <Download className="h-4 w-4 mr-2" /> {t('billView.card.download')}
           </Button>
           {bill.status === 'pending' && bill.customerId === customer?.id && false && (
             <Button size="sm" onClick={() => markBillAsPaid(bill.id)} className="flex-1 bg-[#ba1d1d] text-white rounded-lg hover:bg-[#a11414]">
-              <CreditCard className="h-4 w-4 mr-2" /> Pay
+              <CreditCard className="h-4 w-4 mr-2" /> {t('billView.card.pay')}
             </Button>
           )}
         </div>
@@ -297,39 +299,39 @@ Thank you for dining with us!
           <DialogHeader>
             <DialogTitle className="flex items-center space-x-2 text-lg font-bold text-black">
               <Receipt className="h-5 w-5 text-red-600" />
-              <span>Bills & Payments</span>
+              <span>{t('billView.title')}</span>
             </DialogTitle>
           </DialogHeader>
           
           <div className="flex-1 overflow-y-auto p-4">
             {!session ? (
               <div className="text-center py-8">
-                <p className="text-gray-500">Please join a table session first</p>
+                <p className="text-gray-500">{t('billView.noSession')}</p>
               </div>
             ) : isLoading ? (
               <div className="text-center py-8">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-red-600 mx-auto"></div>
-                <p className="text-gray-500 mt-2">Loading bills...</p>
+                <p className="text-gray-500 mt-2">{t('billView.loading')}</p>
               </div>
             ) : (
               <Tabs value={selectedTab} onValueChange={(value) => setSelectedTab(value as 'my-bills' | 'table-bills')}>
                 <TabsList className="grid w-full grid-cols-2 bg-white">
                   <TabsTrigger value="my-bills" className={`flex items-center space-x-2 ${selectedTab === 'my-bills' ? 'border-b-2 border-[#ba1d1d] text-[#ba1d1d]' : 'text-gray-600'}`}>
                     <User className="h-4 w-4" />
-                    <span>My Bills ({getMyBills().length})</span>
+                    <span>{t('billView.tabs.myBills', { count: getMyBills().length })}</span>
                   </TabsTrigger>
                   <TabsTrigger value="table-bills" className={`flex items-center space-x-2 ${selectedTab === 'table-bills' ? 'border-b-2 border-[#ba1d1d] text-[#ba1d1d]' : 'text-gray-600'}`}>
                     <Users className="h-4 w-4" />
-                    <span>Table Bills ({getTableBills().length})</span>
+                    <span>{t('billView.tabs.tableBills', { count: getTableBills().length })}</span>
                   </TabsTrigger>
                 </TabsList>
                 <TabsContent value="my-bills" className="mt-4">
                   {getMyBills().length === 0 ? (
                     <div className="text-center py-8">
                       <Receipt className="h-12 w-12 mx-auto text-gray-400 mb-4" />
-                      <p className="text-gray-500 mb-4">No personal bills found</p>
+                      <p className="text-gray-500 mb-4">{t('billView.empty.myBills')}</p>
                       <Button onClick={() => setShowBillRequest(true)} className="bg-[#ba1d1d] text-white rounded-lg hover:bg-[#a11414]">
-                        <Bell className="h-4 w-4 mr-2" /> Request Bill
+                        <Bell className="h-4 w-4 mr-2" /> {t('billView.button.request')}
                       </Button>
                     </div>
                   ) : (
@@ -340,9 +342,9 @@ Thank you for dining with us!
                   {getTableBills().length === 0 ? (
                     <div className="text-center py-8">
                       <Users className="h-12 w-12 mx-auto text-gray-400 mb-4" />
-                      <p className="text-gray-500 mb-4">No table bills found</p>
+                      <p className="text-gray-500 mb-4">{t('billView.empty.tableBills')}</p>
                       <Button onClick={() => setShowBillRequest(true)} className="bg-[#ba1d1d] text-white rounded-lg hover:bg-[#a11414]">
-                        <Bell className="h-4 w-4 mr-2" /> Request Bill
+                        <Bell className="h-4 w-4 mr-2" /> {t('billView.button.request')}
                       </Button>
                     </div>
                   ) : (
@@ -354,10 +356,10 @@ Thank you for dining with us!
           </div>
 
           <DialogFooter className="p-4">
-            <Button variant="outline" onClick={() => onOpenChange(false)} className="rounded-lg">Close</Button>
+            <Button variant="outline" onClick={() => onOpenChange(false)} className="rounded-lg">{t('billView.button.close')}</Button>
             {session && (
               <Button onClick={() => setShowBillRequest(true)} className="bg-[#ba1d1d] text-white rounded-lg hover:bg-[#a11414]">
-                <Bell className="h-4 w-4 mr-2" /> Request Bill
+                <Bell className="h-4 w-4 mr-2" /> {t('billView.button.request')}
               </Button>
             )}
           </DialogFooter>

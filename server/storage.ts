@@ -17,6 +17,7 @@ import {
 import { db } from "./db";
 import { eq, and, desc, sql, inArray, lt, ne, or, isNull } from "drizzle-orm";
 import bcrypt from 'bcryptjs';
+import fetch from 'node-fetch';
 
 // Generic storage interface with all required methods
 export interface IStorage {
@@ -70,6 +71,7 @@ export interface IStorage {
   getOrderItem(id: number): Promise<OrderItem | undefined>;
   getOrderItemsByOrderId(orderId: number): Promise<OrderItem[]>;
   createOrderItem(orderItem: InsertOrderItem): Promise<OrderItem>;
+  batchCreateOrderItems(orderItemsArray: InsertOrderItem[]): Promise<OrderItem[]>;
   deleteOrderItemsByOrderId(orderId: number): Promise<boolean>;
   
   // User Methods
@@ -94,6 +96,7 @@ export interface IStorage {
   getOrderCountByRestaurantId(restaurantId: number, startDate: Date, endDate: Date): Promise<number>;
   getAverageOrderValue(restaurantId: number, startDate: Date, endDate: Date): Promise<number>;
   getPopularMenuItems(restaurantId: number, limit: number, options?: { startDate?: Date, endDate?: Date }): Promise<{id: number, name: string, count: number, price: string}[]>;
+  getCombinedDashboardAnalytics(restaurantId: number, startDate: Date, endDate: Date): Promise<{revenue: number, orderCount: number, averageOrderValue: number, activeTables: number, totalTables: number}>;
   
   // Payment related helpers (Stripe removed)
   // updateRestaurantStripeInfo removed - placeholder implementation
@@ -140,6 +143,7 @@ export interface IStorage {
 
   // Count unique chat sessions for a restaurant in the last 24h
   countAiChatSessionsLast24h(restaurantId: number): Promise<number>;
+  translateText(text: string, targetLang: string): Promise<string>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -773,6 +777,75 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Analytics Methods - Optimized for performance
+  
+  // Combined analytics query for dashboard - single database call
+  async getCombinedDashboardAnalytics(restaurantId: number, startDate: Date, endDate: Date): Promise<{revenue: number, orderCount: number, averageOrderValue: number, activeTables: number, totalTables: number}> {
+    try {
+      // Single optimized query to get all dashboard metrics
+      const analyticsResult = await db.select({
+        revenue: sql<string>`COALESCE(SUM(CASE WHEN ${bills.status} = 'paid' THEN ${bills.total}::numeric ELSE 0 END), 0)`,
+        orderCount: sql<number>`COUNT(DISTINCT CASE WHEN ${orders.status} NOT IN ('cancelled') THEN ${orders.id} END)::integer`,
+        averageOrderValue: sql<string>`COALESCE(AVG(CASE WHEN ${orders.status} NOT IN ('cancelled') THEN ${orders.total}::numeric ELSE NULL END), 0)`,
+        activeTables: sql<number>`COUNT(DISTINCT CASE WHEN ${tables.isOccupied} = true THEN ${tables.id} END)::integer`,
+        totalTables: sql<number>`COUNT(DISTINCT ${tables.id})::integer`,
+      })
+      .from(orders)
+      .leftJoin(tableSessions, eq(orders.tableSessionId, tableSessions.id))
+      .leftJoin(bills, eq(bills.tableSessionId, tableSessions.id))
+      .leftJoin(tables, eq(tableSessions.tableId, tables.id))
+      .where(
+        and(
+          eq(orders.restaurantId, restaurantId),
+          sql`${orders.createdAt} >= ${startDate.toISOString()}`,
+          sql`${orders.createdAt} <= ${endDate.toISOString()}`
+        )
+      );
+
+      const result = analyticsResult[0];
+      
+      return {
+        revenue: result?.revenue ? parseFloat(result.revenue) : 0,
+        orderCount: result?.orderCount || 0,
+        averageOrderValue: result?.averageOrderValue ? parseFloat(result.averageOrderValue) : 0,
+        activeTables: result?.activeTables || 0,
+        totalTables: result?.totalTables || 0
+      };
+    } catch (error) {
+      console.error('Error in getCombinedDashboardAnalytics:', error);
+      // Fallback to individual queries if combined query fails
+      return await this.getFallbackDashboardAnalytics(restaurantId, startDate, endDate);
+    }
+  }
+
+  // Fallback method using individual queries
+  private async getFallbackDashboardAnalytics(restaurantId: number, startDate: Date, endDate: Date) {
+    try {
+      const [revenue, orderCount, averageOrderValue, tables] = await Promise.all([
+        this.getRestaurantRevenue(restaurantId, startDate, endDate),
+        this.getOrderCountByRestaurantId(restaurantId, startDate, endDate),
+        this.getAverageOrderValue(restaurantId, startDate, endDate),
+        this.getTablesByRestaurantId(restaurantId)
+      ]);
+
+      return {
+        revenue,
+        orderCount,
+        averageOrderValue,
+        activeTables: tables.filter(table => table.isOccupied).length,
+        totalTables: tables.length
+      };
+    } catch (error) {
+      console.error('Error in fallback dashboard analytics:', error);
+      return {
+        revenue: 0,
+        orderCount: 0,
+        averageOrderValue: 0,
+        activeTables: 0,
+        totalTables: 0
+      };
+    }
+  }
+
   async getRestaurantRevenue(restaurantId: number, startDate: Date, endDate: Date): Promise<number> {
     try {
     const result = await db.select({
@@ -1956,6 +2029,34 @@ export class DatabaseStorage implements IStorage {
       return parseInt(result[0].count, 10) || 0;
     }
     return 0;
+  }
+
+  async translateText(text: string, targetLang: string): Promise<string> {
+    const apiKey = process.env.GOOGLE_TRANSLATE_API_KEY;
+    if (!apiKey) {
+      throw new Error("Google Translate API key is not configured.");
+    }
+
+    const url = `https://translation.googleapis.com/language/translate/v2?key=${apiKey}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        q: text,
+        target: targetLang,
+        source: 'en',
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json() as { error: { message: string } };
+      throw new Error(`Google Translate API error: ${error.error.message}`);
+    }
+
+    const data = await response.json() as { data: { translations: [{ translatedText: string }] } };
+    return data.data.translations[0].translatedText;
   }
 }
 

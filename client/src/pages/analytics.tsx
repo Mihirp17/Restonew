@@ -132,17 +132,17 @@ export default function Analytics() {
 
   return (
     <Layout
-      title={t("analytics", "Analytics & AI")}
-      description="View performance metrics and get AI-powered insights for your restaurant"
+      title={t("analyticsPage.title")}
+      description={t('analyticsPage.description')}
       requireAuth
       allowedRoles={['restaurant']}
     >
       <Tabs defaultValue="analytics" className="space-y-6">
         <TabsList className="grid w-full grid-cols-4">
-          <TabsTrigger value="analytics">{t("analytics", "Analytics")}</TabsTrigger>
-          <TabsTrigger value="ai-insights">{t("aiInsights", "AI Insights")}</TabsTrigger>
-          <TabsTrigger value="restaurant-analytics">{t("restaurantAnalytics", "Restaurant Analytics")}</TabsTrigger>
-          <TabsTrigger value="ai-assistant">{t("aiAssistant", "AI Assistant")}</TabsTrigger>
+          <TabsTrigger value="analytics">{t("analytics")}</TabsTrigger>
+          <TabsTrigger value="ai-insights">{t("analyticsPage.tabs.aiInsights")}</TabsTrigger>
+          <TabsTrigger value="restaurant-analytics">{t("analyticsPage.tabs.restaurantAnalytics")}</TabsTrigger>
+          <TabsTrigger value="ai-assistant">{t("analyticsPage.tabs.aiAssistant")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="analytics" className="space-y-6">
@@ -153,13 +153,13 @@ export default function Analytics() {
               onValueChange={(value: any) => setDateRange(value)}
             >
               <SelectTrigger className="w-[180px]">
-                <SelectValue placeholder="Select time range" />
+                <SelectValue placeholder={t('analyticsPage.dateRange.placeholder')} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="today">{t("today", "Today")}</SelectItem>
-                <SelectItem value="week">{t("thisWeek", "This Week")}</SelectItem>
-                <SelectItem value="month">{t("thisMonth", "This Month")}</SelectItem>
-                <SelectItem value="year">{t("thisYear", "This Year")}</SelectItem>
+                <SelectItem value="today">{t("today")}</SelectItem>
+                <SelectItem value="week">{t("thisWeek")}</SelectItem>
+                <SelectItem value="month">{t("thisMonth")}</SelectItem>
+                <SelectItem value="year">{t("analyticsPage.dateRange.thisYear")}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -178,7 +178,7 @@ export default function Analytics() {
                 className="mt-4"
               >
                 <span className="material-icons mr-2">refresh</span>
-                Retry
+                {t('analyticsPage.error.retry')}
               </Button>
             </div>
           ) : (
@@ -202,9 +202,9 @@ export default function Analytics() {
                       ) : analyticsData?.orderCount}
                     </div>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      {dateRange === 'today' ? 'Today' : 
-                       dateRange === 'week' ? 'Past 7 days' : 
-                       dateRange === 'month' ? 'Past 30 days' : 'Past year'}
+                      {dateRange === 'today' ? t('today') : 
+                       dateRange === 'week' ? t('analyticsPage.metrics.past7Days') : 
+                       dateRange === 'month' ? t('analyticsPage.metrics.past30Days') : t('analyticsPage.metrics.pastYear')}
                     </p>
                   </CardContent>
                 </Card>
@@ -212,7 +212,7 @@ export default function Analytics() {
                 <Card>
                   <CardHeader className="pb-2">
                     <CardTitle className="text-sm font-medium text-gray-500 dark:text-gray-400">
-                      {t("totalRevenue", "Total Revenue")}
+                      {t("analyticsPage.metrics.totalRevenue")}
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
@@ -226,9 +226,9 @@ export default function Analytics() {
                       ) : formatCurrency(analyticsData?.revenue || 0)}
                     </div>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      {dateRange === 'today' ? 'Today' : 
-                       dateRange === 'week' ? 'Past 7 days' : 
-                       dateRange === 'month' ? 'Past 30 days' : 'Past year'}
+                      {dateRange === 'today' ? t('today') : 
+                       dateRange === 'week' ? t('analyticsPage.metrics.past7Days') : 
+                       dateRange === 'month' ? t('analyticsPage.metrics.past30Days') : t('analyticsPage.metrics.pastYear')}
                     </p>
                   </CardContent>
                 </Card>
@@ -236,7 +236,7 @@ export default function Analytics() {
                 <Card>
                   <CardHeader className="pb-2">
                     <CardTitle className="text-sm font-medium text-gray-500 dark:text-gray-400">
-                      {t("averageOrderValue", "Average Order Value")}
+                      {t("analyticsPage.metrics.averageOrderValue")}
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
@@ -250,9 +250,9 @@ export default function Analytics() {
                       ) : formatCurrency(analyticsData?.averageOrderValue || 0)}
                     </div>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      {dateRange === 'today' ? 'Today' : 
-                       dateRange === 'week' ? 'Past 7 days' : 
-                       dateRange === 'month' ? 'Past 30 days' : 'Past year'}
+                      {dateRange === 'today' ? t('today') : 
+                       dateRange === 'week' ? t('analyticsPage.metrics.past7Days') : 
+                       dateRange === 'month' ? t('analyticsPage.metrics.past30Days') : t('analyticsPage.metrics.pastYear')}
                     </p>
                   </CardContent>
                 </Card>
@@ -260,12 +260,12 @@ export default function Analytics() {
 
               {/* Section: Sales Analytics */}
               <div className="mb-8">
-                <h2 className="text-xl font-semibold text-[#373643] mb-4">Sales Analytics</h2>
+                <h2 className="text-xl font-semibold text-[#373643] mb-4">{t('analyticsPage.charts.salesAnalytics')}</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 {/* Popular Items Chart */}
                   <Card className="bg-white border border-[#373643]/10 shadow-lg rounded-2xl p-4">
                   <CardHeader>
-                    <CardTitle>Popular Items</CardTitle>
+                    <CardTitle>{t('analyticsPage.charts.popularItems')}</CardTitle>
                   </CardHeader>
                   <CardContent>
                     {isLoading ? (
@@ -337,7 +337,7 @@ export default function Analytics() {
                         </>
                     ) : (
                       <div className="flex justify-center items-center h-80 text-gray-500 dark:text-gray-400">
-                        No data available
+                        {t('analyticsPage.charts.noData')}
                       </div>
                     )}
                   </CardContent>
@@ -345,7 +345,7 @@ export default function Analytics() {
                 {/* Revenue by Item Chart */}
                   <Card className="bg-white border border-[#373643]/10 shadow-lg rounded-2xl p-4">
                   <CardHeader>
-                    <CardTitle>Revenue by Item</CardTitle>
+                    <CardTitle>{t('analyticsPage.charts.revenueByItem')}</CardTitle>
                   </CardHeader>
                   <CardContent>
                     {isLoading ? (
@@ -415,7 +415,7 @@ export default function Analytics() {
                       </ResponsiveContainer>
                     ) : (
                       <div className="flex justify-center items-center h-80 text-gray-500 dark:text-gray-400">
-                        No data available
+                        {t('analyticsPage.charts.noData')}
                       </div>
                     )}
                   </CardContent>
@@ -423,7 +423,7 @@ export default function Analytics() {
                   {/* Pie Chart: Order Share by Item */}
                   <Card className="bg-white border border-[#373643]/10 shadow-lg rounded-2xl p-4">
                     <CardHeader>
-                      <CardTitle>Order Share by Item</CardTitle>
+                      <CardTitle>{t('analyticsPage.charts.orderShare')}</CardTitle>
                     </CardHeader>
                     <CardContent>
                       {isLoading ? (
@@ -470,7 +470,7 @@ export default function Analytics() {
                         </ResponsiveContainer>
                       ) : (
                         <div className="flex justify-center items-center h-80 text-gray-500 dark:text-gray-400">
-                          No data available
+                          {t('analyticsPage.charts.noData')}
                         </div>
                       )}
                     </CardContent>
@@ -478,7 +478,7 @@ export default function Analytics() {
                   {/* Daily Sales Area Chart */}
                   <Card className="bg-white border border-[#373643]/10 shadow-lg rounded-2xl p-4">
                     <CardHeader>
-                      <CardTitle>Daily Sales</CardTitle>
+                      <CardTitle>{t('analyticsPage.charts.dailySales')}</CardTitle>
                     </CardHeader>
                     <CardContent>
                       {isLoading ? (
@@ -521,7 +521,7 @@ export default function Analytics() {
                         </ResponsiveContainer>
                       ) : (
                         <div className="flex justify-center items-center h-80 text-gray-500 dark:text-gray-400">
-                          No data available
+                          {t('analyticsPage.charts.noData')}
                         </div>
                       )}
                     </CardContent>
@@ -531,10 +531,10 @@ export default function Analytics() {
 
               {/* Section: Menu Performance */}
               <div className="mt-12">
-                <h2 className="text-xl font-semibold text-[#373643] mb-4">Menu Performance</h2>
+                <h2 className="text-xl font-semibold text-[#373643] mb-4">{t('analyticsPage.menuPerformance.title')}</h2>
                 <Card className="bg-white border border-[#373643]/10 shadow-lg rounded-2xl p-4">
                 <CardHeader>
-                  <CardTitle>Popular Menu Items</CardTitle>
+                  <CardTitle>{t('popularMenuItems')}</CardTitle>
                 </CardHeader>
                 <CardContent>
                   {isLoading ? (
@@ -546,10 +546,10 @@ export default function Analytics() {
                       <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                         <thead className="bg-gray-50 dark:bg-gray-700">
                           <tr>
-                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Item</th>
-                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Orders</th>
-                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Unit Price</th>
-                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Total Revenue</th>
+                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('analyticsPage.table.item')}</th>
+                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('analyticsPage.table.orders')}</th>
+                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('analyticsPage.table.unitPrice')}</th>
+                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('analyticsPage.table.totalRevenue')}</th>
                           </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
@@ -566,7 +566,7 @@ export default function Analytics() {
                     </div>
                   ) : (
                     <div className="py-8 text-center text-gray-500 dark:text-gray-400">
-                      No data available
+                      {t('analyticsPage.charts.noData')}
                     </div>
                   )}
                 </CardContent>
@@ -581,7 +581,7 @@ export default function Analytics() {
             <AIInsights restaurantId={restaurantId} />
           ) : (
             <div className="flex justify-center items-center py-12">
-              <p className="text-gray-500">Please log in to view AI insights.</p>
+              <p className="text-gray-500">{t('analyticsPage.ai.loginRequiredInsights')}</p>
             </div>
           )}
         </TabsContent>
@@ -591,7 +591,7 @@ export default function Analytics() {
             <NewAIInsights restaurantId={restaurantId} />
           ) : (
             <div className="flex justify-center items-center py-12">
-              <p className="text-gray-500">Please log in to view restaurant analytics.</p>
+              <p className="text-gray-500">{t('analyticsPage.ai.loginRequiredAnalytics')}</p>
             </div>
           )}
         </TabsContent>
@@ -614,21 +614,21 @@ export default function Analytics() {
                 </Card> */}
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-lg">AI Tips</CardTitle>
+                    <CardTitle className="text-lg">{t('analyticsPage.ai.tips.title')}</CardTitle>
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-3 text-sm">
                       <div className="p-3 bg-gray-50 rounded-lg">
-                        <p className="font-medium text-gray-700">💡 Ask about menu performance</p>
-                        <p className="text-gray-600">Get insights on your best and worst performing items</p>
+                        <p className="font-medium text-gray-700">{t('analyticsPage.ai.tips.menuPerformance.title')}</p>
+                        <p className="text-gray-600">{t('analyticsPage.ai.tips.menuPerformance.description')}</p>
                       </div>
                       <div className="p-3 bg-gray-50 rounded-lg">
-                        <p className="font-medium text-gray-700">📊 Revenue analysis</p>
-                        <p className="text-gray-600">Understand your peak hours and revenue trends</p>
+                        <p className="font-medium text-gray-700">{t('analyticsPage.ai.tips.revenueAnalysis.title')}</p>
+                        <p className="text-gray-600">{t('analyticsPage.ai.tips.revenueAnalysis.description')}</p>
                       </div>
                       <div className="p-3 bg-gray-50 rounded-lg">
-                        <p className="font-medium text-gray-700">🎯 Operational efficiency</p>
-                        <p className="text-gray-600">Get tips to improve kitchen workflow and wait times</p>
+                        <p className="font-medium text-gray-700">{t('analyticsPage.ai.tips.operationalEfficiency.title')}</p>
+                        <p className="text-gray-600">{t('analyticsPage.ai.tips.operationalEfficiency.description')}</p>
                       </div>
                     </div>
                   </CardContent>
@@ -637,7 +637,7 @@ export default function Analytics() {
             </div>
           ) : (
             <div className="flex justify-center items-center py-12">
-              <p className="text-gray-500">Please log in to use the AI assistant.</p>
+              <p className="text-gray-500">{t('analyticsPage.ai.loginRequiredAssistant')}</p>
             </div>
           )}
         </TabsContent>

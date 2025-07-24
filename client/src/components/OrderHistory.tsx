@@ -3,6 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { useRestaurant } from "@/contexts/RestaurantContext";
 import { Badge } from "@/components/ui/badge";
 import { Clock, CheckCircle, XCircle } from "lucide-react";
+import { useLang } from "@/contexts/language-context";
 
 interface OrderHistoryProps {
   open: boolean;
@@ -28,6 +29,7 @@ interface Order {
 
 export default function OrderHistory({ open, onOpenChange }: OrderHistoryProps) {
   const { restaurantId, session } = useRestaurant();
+  const { t } = useLang();
   const [orders, setOrders] = useState<Order[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -86,18 +88,18 @@ export default function OrderHistory({ open, onOpenChange }: OrderHistoryProps) 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md max-h-[80vh] overflow-hidden flex flex-col">
         <DialogHeader>
-          <DialogTitle>Order History</DialogTitle>
+          <DialogTitle>{t('orderHistory.title')}</DialogTitle>
         </DialogHeader>
         
         <div className="flex-1 overflow-y-auto">
           {isLoading ? (
             <div className="text-center py-8">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
-              <p className="text-gray-500 mt-2">Loading orders...</p>
+              <p className="text-gray-500 mt-2">{t('orderHistory.loading')}</p>
             </div>
           ) : orders.length === 0 ? (
             <div className="text-center py-8">
-              <p className="text-gray-500">No orders yet</p>
+              <p className="text-gray-500">{t('orderHistory.noOrders')}</p>
             </div>
           ) : (
             <div className="space-y-4">
@@ -106,7 +108,7 @@ export default function OrderHistory({ open, onOpenChange }: OrderHistoryProps) 
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center space-x-2">
                       {getStatusIcon(order.status)}
-                      <span className="font-medium">Order #{order.orderNumber}</span>
+                      <span className="font-medium">{t('orderHistory.order.id', { orderNumber: order.orderNumber })}</span>
                     </div>
                     <Badge className={getStatusColor(order.status)}>
                       {order.status}
@@ -136,4 +138,4 @@ export default function OrderHistory({ open, onOpenChange }: OrderHistoryProps) 
       </DialogContent>
     </Dialog>
   );
-} 
+}

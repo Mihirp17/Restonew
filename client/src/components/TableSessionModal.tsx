@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useRestaurant } from "@/contexts/RestaurantContext";
 import { useToast } from "@/hooks/use-toast";
+import { useLang } from "@/contexts/language-context";
 
 interface TableSessionModalProps {
   open: boolean;
@@ -14,6 +15,7 @@ interface TableSessionModalProps {
 export default function TableSessionModal({ open, onOpenChange }: TableSessionModalProps) {
   const { restaurantId, tableNumber, setSession, setCustomer } = useRestaurant();
   const { toast } = useToast();
+  const { t } = useLang();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -23,8 +25,8 @@ export default function TableSessionModal({ open, onOpenChange }: TableSessionMo
     e.preventDefault();
     if (!name.trim()) {
       toast({
-        title: "Error",
-        description: "Name is required",
+        title: t('customerEntry.toast.errorTitle'),
+        description: t('customerEntry.toast.nameRequired'),
         variant: "destructive",
       });
       return;
@@ -53,7 +55,7 @@ export default function TableSessionModal({ open, onOpenChange }: TableSessionMo
           });
           
           if (!customerResponse.ok) {
-            throw new Error('Failed to join session');
+            throw new Error(t('customerEntry.toast.sessionJoinFailed'));
           }
           
           const customer = await customerResponse.json();
@@ -62,8 +64,8 @@ export default function TableSessionModal({ open, onOpenChange }: TableSessionMo
           onOpenChange(false);
           
           toast({
-            title: "Joined Session!",
-            description: `Welcome ${name}! You've joined the table session.`,
+            title: t('customerEntry.toast.joinedSessionTitle'),
+            description: t('customerEntry.toast.joinedSessionDescription', { name }),
           });
           return;
         }
@@ -80,7 +82,7 @@ export default function TableSessionModal({ open, onOpenChange }: TableSessionMo
         }),
       });
 
-      if (!sessionResponse.ok) throw new Error("Failed to create session");
+      if (!sessionResponse.ok) throw new Error(t('customerEntry.toast.sessionCreateFailed'));
       const session = await sessionResponse.json();
 
       // Create customer
@@ -96,7 +98,7 @@ export default function TableSessionModal({ open, onOpenChange }: TableSessionMo
         }),
       });
 
-      if (!customerResponse.ok) throw new Error("Failed to create customer");
+      if (!customerResponse.ok) throw new Error(t('customerEntry.toast.customerCreateFailed'));
       const customer = await customerResponse.json();
 
       setSession(session);
@@ -104,14 +106,14 @@ export default function TableSessionModal({ open, onOpenChange }: TableSessionMo
       onOpenChange(false);
 
       toast({
-        title: "Welcome!",
-        description: `Welcome ${name}! Your table session is ready.`,
+        title: t('customerEntry.toast.welcomeTitle'),
+        description: t('customerEntry.toast.welcomeDescription', { name }),
       });
     } catch (error) {
       console.error("Error creating session:", error);
       toast({
-        title: "Error",
-        description: "Failed to start session. Please try again.",
+        title: t("tableSession.error.title"),
+        description: t("tableSession.error.failedToStart"),
         variant: "destructive",
       });
     } finally {
@@ -123,48 +125,48 @@ export default function TableSessionModal({ open, onOpenChange }: TableSessionMo
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Welcome to Our Restaurant</DialogTitle>
+          <DialogTitle>{t('welcome')}</DialogTitle>
         </DialogHeader>
         
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <Label htmlFor="name">Name *</Label>
+            <Label htmlFor="name">{t('customerEntry.nameLabel')}</Label>
             <Input
               id="name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Enter your name"
+              placeholder={t('customerEntry.namePlaceholder')}
               required
             />
           </div>
           
           <div>
-            <Label htmlFor="email">Email (optional)</Label>
+            <Label htmlFor="email">{t('customerEntry.emailLabel')}</Label>
             <Input
               id="email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="Enter your email"
+              placeholder={t('customerEntry.emailPlaceholder')}
             />
           </div>
           
           <div>
-            <Label htmlFor="phone">Phone (optional)</Label>
+            <Label htmlFor="phone">{t('customerEntry.phoneLabel')}</Label>
             <Input
               id="phone"
               type="tel"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              placeholder="Enter your phone number"
+              placeholder={t('customerEntry.phonePlaceholder')}
             />
           </div>
           
           <Button type="submit" disabled={isSubmitting} className="w-full">
-            {isSubmitting ? "Starting..." : "Start Ordering"}
+            {isSubmitting ? t('customerEntry.submitButton.submitting') : t('customerEntry.submitButton.default')}
           </Button>
         </form>
       </DialogContent>
     </Dialog>
   );
-} 
+}

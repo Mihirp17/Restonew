@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { useState } from "react";
 import { QrCode, Pencil, Trash } from "lucide-react";
+import { useLang } from "@/contexts/language-context";
 
 interface Table {
   id: number;
@@ -21,6 +22,7 @@ interface TableCardProps {
 }
 
 export function TableCard({ table, onEdit, onDelete, onToggleOccupied }: TableCardProps) {
+  const { t } = useLang();
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isQrDialogOpen, setIsQrDialogOpen] = useState(false);
 
@@ -36,9 +38,9 @@ export function TableCard({ table, onEdit, onDelete, onToggleOccupied }: TableCa
           <div className={`w-12 h-12 mx-auto rounded-full flex items-center justify-center mb-2 ${table.isOccupied ? 'bg-[#ba1d1d] text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}`}>
             <span className="text-lg font-bold">{table.number}</span>
           </div>
-          <h3 className="font-medium">Table {table.number}</h3>
+          <h3 className="font-medium">{t('tables.card.title', { number: table.number })}</h3>
           <Badge className="mt-2" variant={table.isOccupied ? "default" : "outline"}>
-            {table.isOccupied ? "Occupied" : "Free"}
+            {table.isOccupied ? t('tables.card.status.occupied') : t('tables.card.status.free')}
           </Badge>
         </CardContent>
         <CardFooter className="grid grid-cols-3 gap-1 p-2 border-t">
@@ -47,30 +49,30 @@ export function TableCard({ table, onEdit, onDelete, onToggleOccupied }: TableCa
             size="sm" 
             onClick={() => setIsQrDialogOpen(true)}
             className="hover:bg-blue-50 hover:text-blue-600 transition-colors flex flex-col items-center gap-1 h-auto py-2"
-            title="View QR Code"
+            title={t('tables.card.button.qrCode')}
           >
             <QrCode className="h-4 w-4" />
-            <span className="text-xs">QR Code</span>
+            <span className="text-xs">{t('tables.card.button.qrCode')}</span>
           </Button>
           <Button 
             variant="ghost" 
             size="sm" 
             onClick={onEdit}
             className="hover:bg-green-50 hover:text-green-600 transition-colors flex flex-col items-center gap-1 h-auto py-2"
-            title="Edit Table"
+            title={t('edit')}
           >
             <Pencil className="h-4 w-4" />
-            <span className="text-xs">Edit</span>
+            <span className="text-xs">{t('edit')}</span>
           </Button>
           <Button 
             variant="ghost" 
             size="sm" 
             onClick={() => setIsDeleteDialogOpen(true)}
             className="hover:bg-red-50 hover:text-red-600 transition-colors flex flex-col items-center gap-1 h-auto py-2"
-            title="Delete Table"
+            title={t('delete')}
           >
             <Trash className="h-4 w-4" />
-            <span className="text-xs">Delete</span>
+            <span className="text-xs">{t('delete')}</span>
           </Button>
         </CardFooter>
       </Card>
@@ -79,9 +81,9 @@ export function TableCard({ table, onEdit, onDelete, onToggleOccupied }: TableCa
       <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Delete Table</DialogTitle>
+            <DialogTitle>{t('tables.card.deleteDialog.title')}</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete Table {table.number}? This action cannot be undone.
+              {t('tables.card.deleteDialog.description', { number: table.number })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2 sm:gap-0">
@@ -90,14 +92,14 @@ export function TableCard({ table, onEdit, onDelete, onToggleOccupied }: TableCa
               onClick={() => setIsDeleteDialogOpen(false)}
               className="border-[#373643]/20 text-[#373643] hover:bg-[#373643]/5"
             >
-              Cancel
+              {t('cancel')}
             </Button>
             <Button 
               variant="destructive"
               onClick={handleDelete}
               className="bg-[#ba1d1d] hover:bg-[#ba1d1d]/90 text-white transition-all duration-200"
             >
-              Delete
+              {t('delete')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -107,9 +109,9 @@ export function TableCard({ table, onEdit, onDelete, onToggleOccupied }: TableCa
       <Dialog open={isQrDialogOpen} onOpenChange={setIsQrDialogOpen}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>Table {table.number} QR Code</DialogTitle>
+            <DialogTitle>{t('tables.card.qrDialog.title', { number: table.number })}</DialogTitle>
             <DialogDescription>
-              Customers can scan this QR code to access the menu and place orders.
+              {t('tables.card.qrDialog.description')}
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-center my-4">
@@ -121,7 +123,7 @@ export function TableCard({ table, onEdit, onDelete, onToggleOccupied }: TableCa
               onClick={() => setIsQrDialogOpen(false)}
               className="border-[#373643]/20 text-[#373643] hover:bg-[#373643]/5"
             >
-              Close
+              {t('close')}
             </Button>
             <Button 
               variant="default"
@@ -134,7 +136,7 @@ export function TableCard({ table, onEdit, onDelete, onToggleOccupied }: TableCa
               }}
               className="bg-[#ba1d1d] hover:bg-[#ba1d1d]/90 text-white transition-all duration-200"
             >
-              Download
+              {t('tables.card.qrDialog.button.download')}
             </Button>
             <Button
               variant={table.isOccupied ? "destructive" : "default"}
@@ -147,7 +149,7 @@ export function TableCard({ table, onEdit, onDelete, onToggleOccupied }: TableCa
                 : "bg-[#ba1d1d] hover:bg-[#ba1d1d]/90 text-white transition-all duration-200"
               }
             >
-              Mark as {table.isOccupied ? "Free" : "Occupied"}
+              {t('tables.card.qrDialog.button.markAs', { status: table.isOccupied ? t('tables.card.status.free') : t('tables.card.status.occupied') })}
             </Button>
           </DialogFooter>
         </DialogContent>

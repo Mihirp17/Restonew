@@ -11,6 +11,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useToast } from "@/hooks/use-toast";
+import { useLang } from "@/contexts/language-context";
 import { apiRequest } from "@/lib/queryClient";
 import { formatDate } from "@/lib/utils";
 import { getStatusColor, getInitials, slugify } from "@/lib/utils";
@@ -29,6 +30,7 @@ const restaurantSchema = z.object({
 
 export default function AdminRestaurants() {
   const { toast } = useToast();
+  const { t } = useLang();
   const [restaurants, setRestaurants] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -206,7 +208,7 @@ export default function AdminRestaurants() {
 
   return (
     <Layout
-      title="Restaurant Management"
+      title={t("admin.restaurants.title")}
       description="Manage restaurants on the platform"
       requireAuth
       allowedRoles={['platform_admin']}
@@ -216,7 +218,7 @@ export default function AdminRestaurants() {
         <div className="flex flex-col sm:flex-row justify-between gap-4">
           <div className="relative">
             <Input
-              placeholder="Search restaurants..."
+              placeholder={t("admin.restaurants.searchPlaceholder") || "Search restaurants..."}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-10 w-full sm:w-64"

@@ -324,7 +324,7 @@ class RestaurantAnalyzer {
 }
 
 // Enhanced chat handler with comprehensive query processing
-export async function handleRestaurantChat(message: ChatMessage): Promise<string> {
+export async function handleRestaurantChat(message: ChatMessage, lang: string = 'en'): Promise<string> {
   try {
     const validation = chatMessageSchema.safeParse(message);
     if (!validation.success) {
@@ -367,7 +367,7 @@ export async function handleRestaurantChat(message: ChatMessage): Promise<string
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
     const prompt = `
-You are an expert restaurant AI assistant. You have access to ALL restaurant data: orders, order items, menu items, customers, bills, tables, users/staff, feedback, subscription, application feedback, and AI insights.
+You are an expert restaurant AI assistant. You have access to ALL restaurant data: orders, order items, menu items, customers, bills, tables, users/staff, feedback, subscription, application feedback, and AI insights. Your response must be in ${lang}.
 
 If the user asks for a chart, graph, or visualization, return a JSON block in your response with the following format:
 
@@ -615,7 +615,7 @@ export async function getHistoricalComparison(restaurantId: number, days: number
 }
 
 // Generate AI insights for a restaurant (updated for shorter insights)
-export async function generateRestaurantInsights(restaurantId: number): Promise<AIInsight[]> {
+export async function generateRestaurantInsights(restaurantId: number, lang: string = 'en'): Promise<AIInsight[]> {
   try {
     if (!process.env.GEMINI_API_KEY) {
       return generateMockInsights(restaurantId);
@@ -627,7 +627,7 @@ export async function generateRestaurantInsights(restaurantId: number): Promise<
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
     const prompt = `
-Generate 3-4 crisp, actionable insights for this restaurant. Each insight should be under 50 words with 2-3 specific recommendations.
+Generate 3-4 crisp, actionable insights for this restaurant in ${lang}. Each insight should be under 50 words with 2-3 specific recommendations.
 
 Restaurant Analysis:
 ${JSON.stringify(analysis, null, 2)}

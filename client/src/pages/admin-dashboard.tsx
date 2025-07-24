@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Layout } from "@/components/layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/hooks/use-auth";
+import { useLang } from "@/contexts/language-context";
 import { apiRequest } from "@/lib/queryClient";
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell } from "recharts";
 import { formatCurrency } from "@/lib/utils";
@@ -9,6 +10,7 @@ import { useSocket } from "@/hooks/use-socket";
 
 export default function AdminDashboard() {
   const { user } = useAuth();
+  const { t } = useLang();
   const { addEventListener, removeEventListener } = useSocket();
   const [isLoading, setIsLoading] = useState(true);
   const [stats, setStats] = useState({
@@ -140,15 +142,15 @@ export default function AdminDashboard() {
           <Card className="border-[#373643]/10 bg-[#ffffff]">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-[#373643]">
-                Total Restaurants
+                {t("admin.dashboard.totalRestaurants")}
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-[#ba1d1d]">
-                {isLoading ? "Loading..." : stats.totalRestaurants}
+                {isLoading ? t("status.loading") : stats.totalRestaurants}
               </div>
               <p className="text-xs text-[#373643]/60 mt-1">
-                Registered on the platform
+                {t("admin.dashboard.registeredPlatform")}
               </p>
             </CardContent>
           </Card>
@@ -156,15 +158,15 @@ export default function AdminDashboard() {
           <Card className="border-[#373643]/10 bg-[#ffffff]">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-[#373643]">
-                Active Subscriptions
+                {t("admin.dashboard.activeSubscriptions")}
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-[#ba1d1d]">
-                {isLoading ? "Loading..." : stats.activeSubscriptions}
+                {isLoading ? t("status.loading") : stats.activeSubscriptions}
               </div>
               <p className="text-xs text-[#373643]/60 mt-1">
-                Currently active
+                {t("admin.dashboard.currentlyActive")}
               </p>
             </CardContent>
           </Card>
@@ -172,15 +174,15 @@ export default function AdminDashboard() {
           <Card className="border-[#373643]/10 bg-[#ffffff]">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-[#373643]">
-                Total Revenue
+                {t("admin.dashboard.totalRevenue")}
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-[#ba1d1d]">
-                {isLoading ? "Loading..." : `$${stats.totalRevenue.toLocaleString()}`}
+                {isLoading ? t("status.loading") : `$${stats.totalRevenue.toLocaleString()}`}
               </div>
               <p className="text-xs text-[#373643]/60 mt-1">
-                This month
+                {t("admin.dashboard.thisMonth")}
               </p>
             </CardContent>
           </Card>

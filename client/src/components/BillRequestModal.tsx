@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useRestaurant } from "@/contexts/RestaurantContext";
 import { useToast } from "@/hooks/use-toast";
 import { Bell, Users, User, Calculator } from "lucide-react";
+import { useLang } from "@/contexts/language-context";
 
 interface BillRequestModalProps {
   open: boolean;
@@ -17,13 +18,14 @@ interface BillRequestModalProps {
 export default function BillRequestModal({ open, onOpenChange }: BillRequestModalProps) {
   const { restaurantId, session, customer } = useRestaurant();
   const { toast } = useToast();
+  const { t } = useLang();
   const [requestType, setRequestType] = useState<'individual' | 'table' | 'partial'>('individual');
   const [isRequesting, setIsRequesting] = useState(false);
   const [specialRequests, setSpecialRequests] = useState('');
 
   const handleRequestBill = async () => {
     if (!session || !customer || !restaurantId) {
-      toast({ title: "Error", description: "Session information missing", variant: "destructive" });
+      toast({ title: t('billRequest.toast.noSession.title'), description: t('billRequest.toast.noSession.description'), variant: "destructive" });
       return;
     }
 
@@ -41,15 +43,15 @@ export default function BillRequestModal({ open, onOpenChange }: BillRequestModa
       });
 
       if (response.ok) {
-        toast({ title: "Bill Request Sent", description: "A waiter will assist you shortly" });
+        toast({ title: t('billRequest.toast.success.title'), description: t('billRequest.toast.success.description') });
         onOpenChange(false);
         setSpecialRequests('');
       } else {
-        throw new Error('Failed to send bill request');
+        throw new Error(t('billRequest.toast.failed.description'));
       }
     } catch (error) {
       console.error("Error requesting bill:", error);
-      toast({ title: "Request Failed", description: "Failed to send bill request.", variant: "destructive" });
+      toast({ title: t('billRequest.toast.failed.title'), description: t('billRequest.toast.failed.description'), variant: "destructive" });
     } finally {
       setIsRequesting(false);
     }
@@ -66,9 +68,9 @@ export default function BillRequestModal({ open, onOpenChange }: BillRequestModa
 
   const getBillTypeDescription = (type: string) => {
     switch (type) {
-      case 'individual': return 'Request your personal bill for items you ordered';
-      case 'table': return 'Request a combined bill for the entire table';
-      case 'partial': return 'Request a custom split bill with specific people';
+      case 'individual': return t('billRequest.type.myBill.description');
+      case 'table': return t('billRequest.type.tableBill.description');
+      case 'partial': return t('billRequest.type.customSplit.description');
       default: return '';
     }
   };
@@ -79,13 +81,13 @@ export default function BillRequestModal({ open, onOpenChange }: BillRequestModa
         <DialogHeader>
           <DialogTitle className="flex items-center space-x-2 text-lg font-bold text-black">
             <Bell className="h-5 w-5 text-red-600" />
-            <span>Request Bill</span>
+            <span>{t('billRequest.title')}</span>
           </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4 p-4">
           <div>
-            <h4 className="text-sm font-medium text-black mb-3">What type of bill would you like?</h4>
+            <h4 className="text-sm font-medium text-black mb-3">{t('billRequest.type.question')}</h4>
             <RadioGroup value={requestType} onValueChange={(value) => setRequestType(value as any)}>
               <Card className={`rounded-lg ${requestType === 'individual' ? 'ring-2 ring-[#ba1d1d]' : ''}`}>
                 <CardContent className="p-4 flex items-center space-x-3">
@@ -93,7 +95,7 @@ export default function BillRequestModal({ open, onOpenChange }: BillRequestModa
                   <Label htmlFor="individual" className="flex-1 flex items-center space-x-3 cursor-pointer">
                     {getBillTypeIcon('individual')}
                     <div>
-                      <div className="font-medium text-black">My Bill</div>
+                      <div className="font-medium text-black">{t('billRequest.type.myBill')}</div>
                       <div className="text-sm text-gray-600">{getBillTypeDescription('individual')}</div>
                     </div>
                   </Label>
@@ -105,7 +107,7 @@ export default function BillRequestModal({ open, onOpenChange }: BillRequestModa
                   <Label htmlFor="table" className="flex-1 flex items-center space-x-3 cursor-pointer">
                     {getBillTypeIcon('table')}
                     <div>
-                      <div className="font-medium text-black">Table Bill</div>
+                      <div className="font-medium text-black">{t('billRequest.type.tableBill')}</div>
                       <div className="text-sm text-gray-600">{getBillTypeDescription('table')}</div>
                     </div>
                   </Label>
@@ -117,7 +119,7 @@ export default function BillRequestModal({ open, onOpenChange }: BillRequestModa
                   <Label htmlFor="partial" className="flex-1 flex items-center space-x-3 cursor-pointer">
                     {getBillTypeIcon('partial')}
                     <div>
-                      <div className="font-medium text-black">Custom Split</div>
+                      <div className="font-medium text-black">{t('billRequest.type.customSplit')}</div>
                       <div className="text-sm text-gray-600">{getBillTypeDescription('partial')}</div>
                     </div>
                   </Label>
@@ -126,10 +128,10 @@ export default function BillRequestModal({ open, onOpenChange }: BillRequestModa
             </RadioGroup>
           </div>
           <div>
-            <Label htmlFor="special-requests" className="text-sm font-medium text-black">Special Requests (Optional)</Label>
+            <Label htmlFor="special-requests" className="text-sm font-medium text-black">{t('billRequest.specialRequests.label')}</Label>
             <Textarea
               id="special-requests"
-              placeholder="Any special instructions..."
+              placeholder={t('billRequest.specialRequests.placeholder')}
               value={specialRequests}
               onChange={(e) => setSpecialRequests(e.target.value)}
               className="mt-1 rounded-lg bg-gray-100"
@@ -139,16 +141,16 @@ export default function BillRequestModal({ open, onOpenChange }: BillRequestModa
         </div>
 
         <DialogFooter className="p-4">
-          <Button variant="outline" onClick={() => onOpenChange(false)} className="rounded-lg">Cancel</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="rounded-lg">{t('billRequest.button.cancel')}</Button>
           <Button 
             onClick={handleRequestBill}
             disabled={isRequesting}
             className="bg-[#ba1d1d] text-white rounded-lg hover:bg-[#a11414]"
           >
-            {isRequesting ? "Sending..." : (
+            {isRequesting ? t('billRequest.button.sending') : (
               <>
                 <Bell className="h-4 w-4 mr-2" />
-                Request Bill
+                {t('billRequest.button.request')}
               </>
             )}
           </Button>

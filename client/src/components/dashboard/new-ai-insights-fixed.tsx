@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { formatCurrency } from "@/lib/utils";
+import { useLang } from "@/contexts/language-context";
 import { 
   BarChart, 
   Bar, 
@@ -95,6 +96,7 @@ const BRAND_GRAY = "#373643";
 const BRAND_COLORS = [BRAND_RED, BRAND_GREEN, BRAND_GREEN_DARK, BRAND_GRAY];
 
 export function NewAIInsights({ restaurantId, startDate, endDate }: AIInsightsProps) {
+  const { t } = useLang();
   const [menuAnalytics, setMenuAnalytics] = useState<MenuAnalytics | null>(null);
   const [demandPredictions, setDemandPredictions] = useState<DemandPrediction[]>([]);
   const [foodPairings, setFoodPairings] = useState<FoodPairingsData | null>(null);

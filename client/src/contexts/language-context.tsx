@@ -10,7 +10,7 @@ interface Translations {
 interface LanguageContextType {
   lang: Language;
   setLang: (lang: Language) => void;
-  t: (key: string, fallback?: string) => string;
+  t: (key: string, options?: { [key: string]: string | number } | string) => string;
   isLoading: boolean;
 }
 
@@ -55,12 +55,21 @@ export function LanguageProvider({ children }: LanguageProviderProps) {
   };
 
   // Translation function
-  const t = (key: string, fallback?: string): string => {
-    const translation = translations[key];
-    if (translation) return translation;
+  const t = (key: string, options?: { [key: string]: string | number } | string): string => {
+    let text = translations[key];
+
+    if (!text) {
+      // If no translation, use fallback if it's a string, otherwise use the key
+      return typeof options === 'string' ? options : key;
+    }
+
+    if (typeof options === 'object' && options !== null) {
+      Object.keys(options).forEach(k => {
+        text = text.replace(new RegExp(`\\{${k}\\}`, 'g'), String((options as any)[k]));
+      });
+    }
     
-    // If no translation found, return fallback or the key itself
-    return fallback || key;
+    return text;
   };
 
   return (
@@ -76,4 +85,4 @@ export function useLang() {
     throw new Error('useLang must be used within a LanguageProvider');
   }
   return context;
-} 
+}

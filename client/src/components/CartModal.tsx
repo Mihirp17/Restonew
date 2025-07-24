@@ -5,6 +5,7 @@ import { useCart } from "@/contexts/CartContext";
 import { useRestaurant } from "@/contexts/RestaurantContext";
 import { useToast } from "@/hooks/use-toast";
 import { Minus, Plus, Trash2 } from "lucide-react";
+import { useLang } from "@/contexts/language-context";
 
 interface CartModalProps {
   open: boolean;
@@ -15,13 +16,14 @@ export default function CartModal({ open, onOpenChange }: CartModalProps) {
   const { items, removeItem, updateQuantity, clearCart, subtotal, tax, total } = useCart();
   const { restaurantId, session, customer } = useRestaurant();
   const { toast } = useToast();
+  const { t } = useLang();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handlePlaceOrder = async () => {
     if (items.length === 0) {
       toast({
-        title: "Empty Cart",
-        description: "Please add items to your cart before placing an order",
+        title: t('cart.toast.emptyCart.title'),
+        description: t('cart.toast.emptyCart.description'),
         variant: "destructive",
       });
       return;
@@ -29,8 +31,8 @@ export default function CartModal({ open, onOpenChange }: CartModalProps) {
 
     if (!session || !customer) {
       toast({
-        title: "No Session",
-        description: "Please start a table session first",
+        title: t('cart.toast.noSession.title'),
+        description: t('cart.toast.noSession.description'),
         variant: "destructive",
       });
       return;
@@ -54,21 +56,21 @@ export default function CartModal({ open, onOpenChange }: CartModalProps) {
         }),
       });
 
-      if (!orderResponse.ok) throw new Error("Failed to place order");
+      if (!orderResponse.ok) throw new Error(t('cart.toast.orderFailed.description'));
       
       const order = await orderResponse.json();
       clearCart();
       onOpenChange(false);
 
       toast({
-        title: "Order Placed!",
-        description: `Your order #${order.orderNumber} has been submitted`,
+        title: t('cart.toast.orderPlaced.title'),
+        description: t('cart.toast.orderPlaced.description', { orderNumber: order.orderNumber }),
       });
     } catch (error) {
       console.error("Error placing order:", error);
       toast({
-        title: "Error",
-        description: "Failed to place order. Please try again.",
+        title: t('cart.toast.orderFailed.title'),
+        description: t('cart.toast.orderFailed.description'),
         variant: "destructive",
       });
     } finally {
@@ -80,13 +82,13 @@ export default function CartModal({ open, onOpenChange }: CartModalProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md max-h-[80vh] overflow-hidden flex flex-col">
         <DialogHeader>
-          <DialogTitle>Your Cart</DialogTitle>
+          <DialogTitle>{t('cart.title')}</DialogTitle>
         </DialogHeader>
         
         <div className="flex-1 overflow-y-auto space-y-4">
           {items.length === 0 ? (
             <div className="text-center py-8">
-              <p className="text-gray-500">Your cart is empty</p>
+              <p className="text-gray-500">{t('cart.empty')}</p>
             </div>
           ) : (
             items.map((item) => (
@@ -103,7 +105,7 @@ export default function CartModal({ open, onOpenChange }: CartModalProps) {
                   <h4 className="font-medium text-sm">{item.menuItem.name}</h4>
                   <p className="text-sm text-gray-600">${item.menuItem.price}</p>
                   {item.notes && (
-                    <p className="text-xs text-gray-500">Note: {item.notes}</p>
+                    <p className="text-xs text-gray-500">{t('cart.item.note', { notes: item.notes })}</p>
                   )}
                 </div>
                 
@@ -145,15 +147,15 @@ export default function CartModal({ open, onOpenChange }: CartModalProps) {
         {items.length > 0 && (
           <div className="border-t pt-4 space-y-3">
             <div className="flex justify-between text-sm">
-              <span>Subtotal:</span>
+              <span>{t('cart.summary.subtotal')}</span>
               <span>${subtotal.toFixed(2)}</span>
             </div>
             <div className="flex justify-between text-sm">
-              <span>Tax:</span>
+              <span>{t('cart.summary.tax')}</span>
               <span>${tax.toFixed(2)}</span>
             </div>
             <div className="flex justify-between font-medium">
-              <span>Total:</span>
+              <span>{t('cart.summary.total')}</span>
               <span>${total.toFixed(2)}</span>
             </div>
             
@@ -163,14 +165,14 @@ export default function CartModal({ open, onOpenChange }: CartModalProps) {
                 onClick={clearCart}
                 className="flex-1"
               >
-                Clear Cart
+                {t('cart.button.clear')}
               </Button>
               <Button
                 onClick={handlePlaceOrder}
                 disabled={isSubmitting}
                 className="flex-1"
               >
-                {isSubmitting ? "Placing Order..." : "Place Order"}
+                {isSubmitting ? t('cart.button.placingOrder') : t('cart.button.placeOrder')}
               </Button>
             </div>
           </div>
@@ -178,4 +180,4 @@ export default function CartModal({ open, onOpenChange }: CartModalProps) {
       </DialogContent>
     </Dialog>
   );
-} 
+}
